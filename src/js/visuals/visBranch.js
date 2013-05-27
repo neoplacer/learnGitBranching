@@ -85,23 +85,18 @@ var VisBranch = VisBase.extend({
     var threshold = this.get('gitVisuals').getFlipPos();
     var overThreshold = (visNode.get('pos').x > threshold);
 
+    // easy logic first
     if (!this.get('isHead')) {
-      // easy logic first
-      return (overThreshold) ?
-        -1 :
-        1;
+      return (overThreshold) ? -1 : 1;
     }
+
     // now for HEAD....
     if (overThreshold) {
       // if by ourselves, then feel free to squeeze in. but
       // if other branches are here, then we need to show separate
-      return (this.isBranchStackEmpty()) ?
-        -1 :
-        1;
+      return (this.isBranchStackEmpty()) ? -1 : 1;
     } else {
-      return (this.isBranchStackEmpty()) ?
-        1 :
-        -1;
+      return (this.isBranchStackEmpty()) ? 1 : -1;
     }
   },
 
@@ -290,12 +285,17 @@ var VisBranch = VisBase.extend({
     };
   },
 
-  getName: function() {
-    var name = this.get('branch').get('id');
-    var selected = this.gitEngine.HEAD.get('target').get('id');
+  getIsRemote: function() {
+    return this.get('branch').getIsRemote();
+  },
 
-    var add = (selected == name) ? '*' : '';
-    return name + add;
+  getName: function() {
+    var name = this.get('branch').getName();
+    var selected = this.get('branch') === this.gitEngine.HEAD.get('target');
+    var isRemote = this.getIsRemote();
+
+    var after = (selected && !this.getIsInOrigin() && !isRemote) ? '*' : '';
+    return name + after;
   },
 
   nonTextToFront: function() {
@@ -347,19 +347,26 @@ var VisBranch = VisBase.extend({
       opacity: this.getTextOpacity()
     });
     this.set('text', text);
+    var attr = this.getAttributes();
 
     var rectPos = this.getRectPosition();
     var sizeOfRect = this.getRectSize();
     var rect = paper
       .rect(rectPos.x, rectPos.y, sizeOfRect.w, sizeOfRect.h, 8)
-      .attr(this.getAttributes().rect);
+      .attr(attr.rect);
     this.set('rect', rect);
 
     var arrowPath = this.getArrowPath();
     var arrow = paper
       .path(arrowPath)
-      .attr(this.getAttributes().arrow);
+      .attr(attr.arrow);
     this.set('arrow', arrow);
+
+    // set CSS
+    var keys = ['text', 'rect', 'arrow'];
+    _.each(keys, function(key) {
+      $(this.get(key).node).css(attr.css);
+    }, this);
 
     this.attachClickHandlers();
     rect.toFront();
@@ -370,16 +377,29 @@ var VisBranch = VisBase.extend({
     if (this.get('gitVisuals').options.noClick) {
       return;
     }
-    var commandStr = 'git checkout ' + this.get('branch').get('id');
-    var Main = require('../app');
-    var objs = [this.get('rect'), this.get('text'), this.get('arrow')];
+    var objs = [
+      this.get('rect'),
+      this.get('text'),
+      this.get('arrow')
+    ];
 
     _.each(objs, function(rObj) {
-      rObj.click(function() {
-        Main.getEventBaton().trigger('commandSubmitted', commandStr);
-      });
-      $(rObj.node).css('cursor', 'pointer');
-    });
+      rObj.click(_.bind(this.onClick ,this));
+    }, this);
+  },
+
+  shouldDisableClick: function() {
+    return this.get('isHead') && !this.gitEngine.getDetachedHead();
+  },
+
+  onClick: function() {
+    if (this.shouldDisableClick()) {
+      return;
+    }
+
+    var commandStr = 'git checkout ' + this.get('branch').get('id');
+    var Main = require('../app');
+    Main.getEventBaton().trigger('commandSubmitted', commandStr);
   },
 
   updateName: function() {
@@ -412,8 +432,16 @@ var VisBranch = VisBase.extend({
     var rectSize = this.getRectSize();
 
     var arrowPath = this.getArrowPath();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
+    var cursorStyle = (this.shouldDisableClick()) ?
+      'auto' :
+      'pointer';
 
     return {
+      css: {
+        cursor: cursorStyle
+      },
       text: {
         x: textPos.x,
         y: textPos.y,
@@ -427,6 +455,7 @@ var VisBranch = VisBase.extend({
         opacity: nonTextOpacity,
         fill: this.getFill(),
         stroke: this.get('stroke'),
+        //'stroke-dasharray': dashArray,
         'stroke-width': this.get('stroke-width')
       },
       arrow: {
@@ -450,20 +479,9 @@ var VisBranch = VisBase.extend({
     this.animateToAttr(toAttr, speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('text').attr(attr.text);
-      this.get('rect').attr(attr.rect);
-      this.get('arrow').attr(attr.arrow);
-      return;
-    }
-
-    var s = speed !== undefined ? speed : this.get('animationSpeed');
-    var e = easing || this.get('animationEasing');
-
-    this.get('text').stop().animate(attr.text, s, e);
-    this.get('rect').stop().animate(attr.rect, s, e);
-    this.get('arrow').stop().animate(attr.arrow, s, e);
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'rect', 'arrow'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
   }
 });
 

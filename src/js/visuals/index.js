@@ -18,6 +18,7 @@ var VisEdgeCollection = require('../visuals/visEdge').VisEdgeCollection;
 function GitVisuals(options) {
   options = options || {};
   this.options = options;
+  this.visualization = options.visualization;
   this.commitCollection = options.commitCollection;
   this.branchCollection = options.branchCollection;
   this.visNodeMap = {};
@@ -38,11 +39,6 @@ function GitVisuals(options) {
   this.branchCollection.on('remove', this.removeBranch, this);
   this.deferred = [];
 
-  // eventually have origin support here
-  this.posBoundaries = {
-    min: 0,
-    max: 1
-  };
   this.flipFraction = 0.65;
 
   var Main = require('../app');
@@ -96,6 +92,10 @@ GitVisuals.prototype.assignGitEngine = function(gitEngine) {
   this.deferFlush();
 };
 
+GitVisuals.prototype.getVisualization = function() {
+  return this.visualization;
+};
+
 GitVisuals.prototype.initHeadBranch = function() {
   // it's unfortaunte we have to do this, but the head branch
   // is an edge case because it's not part of a collection so
@@ -116,9 +116,28 @@ GitVisuals.prototype.getScreenPadding = function() {
   };
 };
 
+GitVisuals.prototype.getPosBoundaries = function() {
+  if (this.gitEngine.hasOrigin()) {
+    return {
+      min: 0,
+      max: 0.5
+    };
+  } else if (this.gitEngine.isOrigin()) {
+    return {
+      min: 0.5,
+      max: 1
+    };
+  }
+  return {
+    min: 0,
+    max: 1
+  };
+};
+
 GitVisuals.prototype.getFlipPos = function() {
-  var min = this.posBoundaries.min;
-  var max = this.posBoundaries.max;
+  var bounds = this.getPosBoundaries();
+  var min = bounds.min;
+  var max = bounds.max;
   return this.flipFraction * (max - min) + min;
 };
 
@@ -472,10 +491,11 @@ GitVisuals.prototype.calcBranchStacks = function() {
 GitVisuals.prototype.calcWidth = function() {
   this.maxWidthRecursive(this.rootCommit);
 
+  var bounds = this.getPosBoundaries();
   this.assignBoundsRecursive(
     this.rootCommit,
-    this.posBoundaries.min,
-    this.posBoundaries.max
+    bounds.min,
+    bounds.max
   );
 };
 
@@ -495,10 +515,9 @@ GitVisuals.prototype.maxWidthRecursive = function(commit) {
   return maxWidth;
 };
 
-GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFrac) {
-  centerFrac = (centerFrac === undefined) ? 0.5 : centerFrac;
+GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max) {
   // I always position myself within my bounds
-  var myWidthPos = min + (max - min) * centerFrac;
+  var myWidthPos = (max + min) / 2.0;
   commit.get('visNode').get('pos').x = myWidthPos;
 
   if (commit.get('children').length === 0) {
@@ -517,28 +536,6 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
     }
   }, this);
 
-  // TODO: refactor into another method
-  var getCenterFrac = function(index, centerFrac) {
-    if (myLength < 0.99) {
-      if (children.length < 2) {
-        return centerFrac;
-      } else {
-        return 0.5;
-      }
-    }
-    if (children.length < 2) {
-      return 0.5;
-    }
-    // we introduce a VERY specific rule here, to push out
-    // the first "divergence" of the graph
-    if (index === 0) {
-      return 1/3;
-    } else if (index === children.length - 1) {
-      return 2/3;
-    }
-    return centerFrac;
-  };
-
   var prevBound = min;
   _.each(children, function(child, index) {
     if (!child.isMainParent(commit)) {
@@ -547,12 +544,11 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
 
     var flex = child.get('visNode').getMaxWidthScaled();
     var portion = (flex / totalFlex) * myLength;
-    var thisCenterFrac = getCenterFrac(index, centerFrac);
 
     var childMin = prevBound;
     var childMax = childMin + portion;
 
-    this.assignBoundsRecursive(child, childMin, childMax, thisCenterFrac);
+    this.assignBoundsRecursive(child, childMin, childMax);
     prevBound = childMin + portion;
   }, this);
 };
@@ -566,7 +562,7 @@ GitVisuals.prototype.calcDepth = function() {
 
   var depthIncrement = this.getDepthIncrement(maxDepth);
   _.each(this.visNodeMap, function(visNode) {
-    visNode.setDepthBasedOn(depthIncrement);
+    visNode.setDepthBasedOn(depthIncrement, this.getHeaderOffset());
   }, this);
 };
 
@@ -647,15 +643,25 @@ GitVisuals.prototype.animateEdges = function(speed) {
 };
 
 GitVisuals.prototype.getMinLayers = function() {
-  return (this.options.smallCanvas) ? 4 : 7;
+  return (this.options.smallCanvas) ? 2 : 7;
 };
 
 GitVisuals.prototype.getDepthIncrement = function(maxDepth) {
   // assume there are at least a number of layers until later
   // to have better visuals
   maxDepth = Math.max(maxDepth, this.getMinLayers());
-  var increment = 1.0 / maxDepth;
+  // if we have a header, reserve space for that
+  var vSpace = 1.0 - this.getHeaderOffset();
+  var increment = vSpace / maxDepth;
   return increment;
+};
+
+GitVisuals.prototype.shouldHaveHeader = function() {
+  return this.gitEngine.isOrigin() || this.gitEngine.hasOrigin();
+};
+
+GitVisuals.prototype.getHeaderOffset = function() {
+  return (this.shouldHaveHeader()) ? 0.05 : 0;
 };
 
 GitVisuals.prototype.calcDepthRecursive = function(commit, depth) {
