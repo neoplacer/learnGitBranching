@@ -60,13 +60,12 @@ var VisNode = VisBase.extend({
     this.set('depth', Math.max(this.get('depth') || 0, depth));
   },
 
-  setDepthBasedOn: function(depthIncrement) {
+  setDepthBasedOn: function(depthIncrement, offset) {
     if (this.get('depth') === undefined) {
-      debugger;
       throw new Error('no depth yet!');
     }
     var pos = this.get('pos');
-    pos.y = this.get('depth') * depthIncrement;
+    pos.y = this.get('depth') * depthIncrement + offset;
   },
 
   getMaxWidthScaled: function() {
@@ -109,6 +108,8 @@ var VisNode = VisBase.extend({
     var pos = this.getScreenCoords();
     var textPos = this.getTextScreenCoords();
     var opacity = this.getOpacity();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
 
     return {
       circle: {
@@ -118,6 +119,7 @@ var VisNode = VisBase.extend({
         r: this.getRadius(),
         fill: this.getFill(),
         'stroke-width': this.get('stroke-width'),
+        'stroke-dasharray': dashArray,
         stroke: this.get('stroke')
       },
       text: {
@@ -162,18 +164,15 @@ var VisNode = VisBase.extend({
     this.animateToAttr(snapShot[this.getID()], speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('circle').attr(attr.circle);
-      this.get('text').attr(attr.text);
-      return;
-    }
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'circle'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
+  },
 
+  animateToAttr: function(attr, speed, easing) {
+    VisBase.prototype.animateToAttr.apply(this, arguments);
     var s = speed !== undefined ? speed : this.get('animationSpeed');
     var e = easing || this.get('animationEasing');
-
-    this.get('circle').stop().animate(attr.circle, s, e);
-    this.get('text').stop().animate(attr.text, s, e);
 
     if (easing == 'bounce' &&
         attr.circle && attr.circle.cx !== undefined &&
@@ -278,7 +277,8 @@ var VisNode = VisBase.extend({
     _.each(this.get('outgoingEdges'), function(edge) {
       var headPos = edge.get('head').getScreenCoords();
       var path = edge.genSmoothBezierPathStringFromCoords(parentCoords, headPos);
-      edge.get('path').stop().attr({
+      edge.get('path').stop();
+      edge.get('path').attr({
         path: path,
         opacity: 0
       });

@@ -61,7 +61,10 @@ var regexMap = {
   'git merge': /^git +merge($|\s)/,
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
-  'git cherry-pick': /^git +cherry-pick($|\s)/
+  'git cherry-pick': /^git +cherry-pick($|\s)/,
+  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fetch': /^git +fetch *?$/,
+  'git originInit': /^git +originInit *?$/
 };
 
 var parse = function(str) {
@@ -145,7 +148,10 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-i': false // the mother of all options
     },
     revert: {},
-    show: {}
+    show: {},
+    originInit: {},
+    fetch: {},
+    fakeTeamwork: {}
   };
 };
 
