@@ -3155,11 +3155,12 @@ var GRAPHICS = {
   defaultEasing: 'easeInOut',
   defaultAnimationTime: 400,
 
-  //rectFill: '#FF3A3A',
   rectFill: 'hsb(0.8816909813322127,0.7,1)',
   headRectFill: '#2831FF',
   rectStroke: '#FFF',
   rectStrokeWidth: '3',
+
+  originDash: '- ',
 
   multiBranchY: 20,
   upstreamHeadOpacity: 0.5,
@@ -5400,6 +5401,14 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
     'en_US': 'Quick commit. Go Bears!',
     'zh_CN': '快速提交。上啊月熊！'
   },
+  'git-error-origin-required': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'An origin is required for that command'
+  },
+  'git-error-origin-exists': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'An origin already exists! You cannot make a new one'
+  },
   ///////////////////////////////////////////////////////////////////////////
   'git-error-branch': {
     '__desc__': 'One of the error messages for git',
@@ -6003,6 +6012,7 @@ var Q = require('q');
 var util = require('../util');
 var Main = require('../app');
 var intl = require('../intl');
+var log = require('../log');
 
 var Errors = require('../util/errors');
 var Sandbox = require('../level/sandbox').Sandbox;
@@ -6116,6 +6126,10 @@ var Level = Sandbox.extend({
     });
   },
 
+  getEnglishName: function() {
+    return this.level.name.en_US;
+  },
+
   initName: function() {
     var name = intl.getName(this.level);
 
@@ -6169,6 +6183,7 @@ var Level = Sandbox.extend({
       containerElement: this.goalCanvasHolder.getCanvasLocation(),
       treeString: this.level.goalTreeString,
       noKeyboardInput: true,
+      smallCanvas: true,
       noClick: true
     });
     return this.goalCanvasHolder;
@@ -6182,6 +6197,7 @@ var Level = Sandbox.extend({
         'commandSubmitted',
         toIssue
       );
+      log.showLevelSolution(this.getEnglishName());
     }, this);
 
     var commandStr = command.get('rawStr');
@@ -6381,6 +6397,7 @@ var Level = Sandbox.extend({
     this.solved = true;
     if (!this.isShowingSolution) {
       Main.getEvents().trigger('levelSolved', this.level.id);
+      log.levelSolved(this.getEnglishName());
     }
 
     this.hideGoal();
@@ -6410,6 +6427,7 @@ var Level = Sandbox.extend({
     finishAnimationChain
     .then(function() {
       if (!skipFinishDialog && nextLevel) {
+        log.choseNextLevel(nextLevel.id);
         Main.getEventBaton().trigger(
           'commandSubmitted',
           'level ' + nextLevel.id
@@ -6535,6 +6553,40 @@ exports.regexMap = regexMap;
 
 });
 
+require.define("/src/js/log/index.js",function(require,module,exports,__dirname,__filename,process,global){
+var log = function(category, action, label) {
+  window._gaq = window._gaq || [];
+  window._gaq.push(['_trackEvent', category, action, label]);
+  //console.log('just logged ', [category, action, label].join('|'));
+};
+
+exports.viewInteracted = function(viewName) {
+  log('views', 'interacted', viewName);
+};
+
+exports.showLevelSolution = function(levelName) {
+  log('levels', 'showedLevelSolution', levelName);
+};
+
+exports.choseNextLevel = function(levelID) {
+  log('levels', 'nextLevelChosen', levelID);
+};
+
+exports.levelSelected = function(levelName) {
+  log('levels', 'levelSelected', levelName);
+};
+
+exports.levelSolved = function(levelName) {
+  log('levels', 'levelSolved', levelName);
+};
+
+exports.commandEntered = function(value) {
+  log('commands', 'commandEntered', value);
+};
+
+
+});
+
 require.define("/src/js/util/errors.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 var Backbone = require('backbone');
 
@@ -6650,7 +6702,8 @@ var Visualization = Backbone.View.extend({
       branchCollection: this.branchCollection,
       paper: this.paper,
       noClick: this.options.noClick,
-      smallCanvas: this.options.smallCanvas
+      smallCanvas: this.options.smallCanvas,
+      visualization: this
     });
 
     var GitEngine = require('../git').GitEngine;
@@ -6686,8 +6739,49 @@ var Visualization = Backbone.View.extend({
     this.customEvents.trigger('paperReady');
   },
 
+  clearOrigin: function() {
+    delete this.originVis;
+  },
+
+  makeOrigin: function(options) {
+    // oh god, here we go. We basically do a bizarre form of composition here,
+    // where this visualization actually contains another one of itself.
+    this.originVis = new Visualization(_.extend(
+      {},
+      // copy all of our options over, except...
+      this.options,
+      {
+        // never accept keyboard input or clicks
+        noKeyboardInput: true,
+        noClick: true,
+        treeString: options.treeString
+      }
+    ));
+    // return the newly created visualization which will soon have a git engine
+    return this.originVis;
+  },
+
+  originToo: function(methodToCall, args) {
+    if (!this.originVis) {
+      return;
+    }
+    var callMethod = _.bind(function() {
+      this.originVis[methodToCall].apply(this.originVis, args);
+    }, this);
+
+    if (this.originVis.paper) {
+      callMethod();
+      return;
+    }
+    // this is tricky -- sometimes we already have paper initialized but
+    // our origin vis does not (since we kill that on every reset).
+    // in this case lets bind to the custom event on paper ready
+    this.originVis.customEvents.on('paperReady', callMethod);
+  },
+
   setTreeIndex: function(level) {
     $(this.paper.canvas).css('z-index', level);
+    this.originToo('setTreeIndex', arguments);
   },
 
   setTreeOpacity: function(level) {
@@ -6696,6 +6790,7 @@ var Visualization = Backbone.View.extend({
     }
 
     $(this.paper.canvas).css('opacity', level);
+    this.originToo('setTreeOpacity', arguments);
   },
 
   getAnimationTime: function() { return 300; },
@@ -6703,11 +6798,14 @@ var Visualization = Backbone.View.extend({
   fadeTreeIn: function() {
     this.shown = true;
     $(this.paper.canvas).animate({opacity: 1}, this.getAnimationTime());
+
+    this.originToo('fadeTreeIn', arguments);
   },
 
   fadeTreeOut: function() {
     this.shown = false;
     $(this.paper.canvas).animate({opacity: 0}, this.getAnimationTime());
+    this.originToo('fadeTreeOut', arguments);
   },
 
   hide: function() {
@@ -6716,37 +6814,62 @@ var Visualization = Backbone.View.extend({
     setTimeout(_.bind(function() {
       $(this.paper.canvas).css('visibility', 'hidden');
     }, this), this.getAnimationTime());
+    this.originToo('hide', arguments);
   },
 
   show: function() {
     $(this.paper.canvas).css('visibility', 'visible');
     setTimeout(_.bind(this.fadeTreeIn, this), 10);
+    this.originToo('show', arguments);
   },
 
   showHarsh: function() {
     $(this.paper.canvas).css('visibility', 'visible');
     this.setTreeOpacity(1);
+    this.originToo('showHarsh', arguments);
   },
 
   resetFromThisTreeNow: function(treeString) {
     this.treeString = treeString;
+    // do the same but for origin tree string
+    var oTree = this.getOriginInTreeString(treeString);
+    if (oTree) {
+      var oTreeString = this.gitEngine.printTree(oTree);
+      this.originToo('resetFromThisThreeNow', [oTreeString]);
+    }
+  },
+
+  getOriginInTreeString: function(treeString) {
+    var tree = JSON.parse(unescape(treeString));
+    return tree.originTree;
   },
 
   reset: function(tree) {
     var treeString = tree || this.treeString;
     this.setTreeOpacity(0);
-    if (this.treeString) {
+    if (treeString) {
       this.gitEngine.loadTreeFromString(treeString);
     } else {
       this.gitEngine.defaultInit();
     }
     this.fadeTreeIn();
+
+    if (this.originVis) {
+      if (treeString) {
+        var oTree = this.getOriginInTreeString(treeString);
+        this.originToo('reset', [JSON.stringify(oTree)]);
+      } else {
+        // easy
+        this.originToo('reset', arguments);
+      }
+    }
   },
 
   tearDown: function() {
     this.gitEngine.tearDown();
     this.gitVisuals.tearDown();
     delete this.paper;
+    this.originToo('tearDown', arguments);
   },
 
   die: function() {
@@ -6756,6 +6879,7 @@ var Visualization = Backbone.View.extend({
         this.tearDown();
       }
     }, this), this.getAnimationTime());
+    this.originToo('die', arguments);
   },
 
   myResize: function() {
@@ -6937,11 +7061,14 @@ var TreeCompare = require('./treeCompare').TreeCompare;
 var Errors = require('../util/errors');
 var GitError = Errors.GitError;
 var CommandResult = Errors.CommandResult;
+var EventBaton = require('../util/eventBaton').EventBaton;
 
 function GitEngine(options) {
   this.rootCommit = null;
   this.refs = {};
   this.HEAD = null;
+  this.origin = null;
+  this.localRepo = null;
 
   this.branchCollection = options.branches;
   this.commitCollection = options.collection;
@@ -6971,10 +7098,18 @@ GitEngine.prototype.initUniqueID = function() {
   })();
 };
 
+GitEngine.prototype.assignLocalRepo = function(repo) {
+  this.localRepo = repo;
+};
+
 GitEngine.prototype.defaultInit = function() {
-  // lol 80 char limit
-  var defaultTree = JSON.parse(unescape("%7B%22branches%22%3A%7B%22master%22%3A%7B%22target%22%3A%22C1%22%2C%22id%22%3A%22master%22%2C%22type%22%3A%22branch%22%7D%7D%2C%22commits%22%3A%7B%22C0%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C0%22%2C%22rootCommit%22%3Atrue%7D%2C%22C1%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%22C0%22%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C1%22%7D%7D%2C%22HEAD%22%3A%7B%22id%22%3A%22HEAD%22%2C%22target%22%3A%22master%22%2C%22type%22%3A%22general%20ref%22%7D%7D"));
+  var defaultTree = this.getDefaultTree();
   this.loadTree(defaultTree);
+};
+
+GitEngine.prototype.getDefaultTree = function() {
+  // lol 80 char limit
+  return JSON.parse(unescape("%7B%22branches%22%3A%7B%22master%22%3A%7B%22target%22%3A%22C1%22%2C%22id%22%3A%22master%22%2C%22type%22%3A%22branch%22%7D%7D%2C%22commits%22%3A%7B%22C0%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C0%22%2C%22rootCommit%22%3Atrue%7D%2C%22C1%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%22C0%22%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C1%22%7D%7D%2C%22HEAD%22%3A%7B%22id%22%3A%22HEAD%22%2C%22target%22%3A%22master%22%2C%22type%22%3A%22general%20ref%22%7D%7D"));
 };
 
 GitEngine.prototype.init = function() {
@@ -6991,6 +7126,42 @@ GitEngine.prototype.init = function() {
 
   // commit once to get things going
   this.commit();
+};
+
+GitEngine.prototype.hasOrigin = function() {
+  return !!this.origin;
+};
+
+GitEngine.prototype.isOrigin = function() {
+  return !!this.localRepo;
+};
+
+GitEngine.prototype.exportTreeForBranch = function(branchName) {
+  // this method exports the tree and then prunes everything that
+  // is not connected to branchname
+  var tree = this.exportTree();
+  // get the upstream set
+  var set = this.getUpstreamSet(branchName);
+  // now loop through and delete commits
+  var commitsToLoop = tree.commits;
+  tree.commits = {};
+  _.each(commitsToLoop, function(commit, id) {
+    if (set[id]) {
+      // if included in target branch
+      tree.commits[id] = commit;
+    }
+  });
+
+  var branchesToLoop = tree.branches;
+  tree.branches = {};
+  _.each(branchesToLoop, function(branch, id) {
+    if (id === branchName) {
+      tree.branches[id] = branch;
+    }
+  });
+
+  tree.HEAD.target = branchName;
+  return tree;
 };
 
 GitEngine.prototype.exportTree = function() {
@@ -7031,6 +7202,10 @@ GitEngine.prototype.exportTree = function() {
   HEAD.lastTarget = HEAD.lastLastTarget = HEAD.visBranch = undefined;
   HEAD.target = HEAD.target.get('id');
   totalExport.HEAD = HEAD;
+
+  if (this.hasOrigin()) {
+    totalExport.originTree = this.origin.exportTree();
+  }
 
   return totalExport;
 };
@@ -7099,19 +7274,57 @@ GitEngine.prototype.instantiateFromTree = function(tree) {
   this.branchCollection.each(function(branch) {
     this.gitVisuals.addBranch(branch);
   }, this);
+
+  if (tree.originTree) {
+    var treeString = JSON.stringify(tree.originTree);
+    this.makeOrigin(treeString);
+  }
 };
 
-GitEngine.prototype.reloadGraphics = function() {
-  // get the root commit
-  this.gitVisuals.rootCommit = this.refs['C0'];
-  // this just basically makes the HEAD branch. the head branch really should have been
-  // a member of a collection and not this annoying edge case stuff... one day
-  this.gitVisuals.initHeadBranch();
+GitEngine.prototype.makeOrigin = function(treeString) {
+  if (this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-exists')
+    });
+  }
+  treeString = treeString || this.printTree(this.exportTreeForBranch('master'));
 
-  // when the paper is ready
-  this.gitVisuals.drawTreeFromReload();
+  // this is super super ugly but a necessary hack because of the way LGB was
+  // originally designed. We need to get to the top level visualization from
+  // the git engine -- aka we need to access our own visuals, then the
+  // visualization and ask the main vis to create a new vis/git pair. Then
+  // we grab the gitengine out of that and assign that as our origin repo
+  // which connects the two. epic
+  var masterVis = this.gitVisuals.getVisualization();
+  var originVis = masterVis.makeOrigin({
+    localRepo: this,
+    treeString: treeString
+  });
 
-  this.gitVisuals.refreshTreeHarsh();
+  // defer the starting of our animation until origin has been created
+  this.animationQueue.set('defer', true);
+  originVis.customEvents.on('gitEngineReady', function() {
+    this.origin = originVis.gitEngine;
+    originVis.gitEngine.assignLocalRepo(this);
+    // and then here is the crazy part -- we need the ORIGIN to refresh
+    // itself in a separate animation. @_____@
+    this.origin.externalRefresh();
+    this.animationQueue.start();
+  }, this);
+
+  // TODO handle the case where the master target on origin is not present
+  // locally, so we have to go up the chain. for now we assume the master on
+  // origin is at least present
+  var originTree = JSON.parse(unescape(treeString));
+  var originMasterTarget = originTree.branches.master.target;
+  var originMaster = this.makeBranch(
+    'o/master',
+    this.getCommitFromRef(originMasterTarget)
+  );
+  originMaster.set('remote', true);
+
+  // add a simple refresh animation
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
 };
 
 GitEngine.prototype.getOrMakeRecursive = function(tree, createdSoFar, objID) {
@@ -7187,12 +7400,32 @@ GitEngine.prototype.tearDown = function() {
   this.removeAll();
 };
 
+GitEngine.prototype.reloadGraphics = function() {
+  // get the root commit
+  this.gitVisuals.rootCommit = this.refs['C0'];
+  // this just basically makes the HEAD branch. the head branch really should have been
+  // a member of a collection and not this annoying edge case stuff... one day
+  this.gitVisuals.initHeadBranch();
+
+  // when the paper is ready
+  this.gitVisuals.drawTreeFromReload();
+
+  this.gitVisuals.refreshTreeHarsh();
+};
+
 GitEngine.prototype.removeAll = function() {
   this.branchCollection.reset();
   this.commitCollection.reset();
   this.refs = {};
   this.HEAD = null;
   this.rootCommit = null;
+
+  if (this.origin) {
+    // we will restart all this jazz during init from tree
+    this.origin.gitVisuals.getVisualization().tearDown();
+    delete this.origin;
+    this.gitVisuals.getVisualization().clearOrigin();
+  }
 
   this.gitVisuals.resetAll();
 };
@@ -7234,7 +7467,7 @@ GitEngine.prototype.validateBranchName = function(name) {
   return name;
 };
 
-GitEngine.prototype.makeBranch = function(id, target) {
+GitEngine.prototype.validateAndMakeBranch = function(id, target) {
   id = this.validateBranchName(id);
   if (this.refs[id]) {
     throw new GitError({
@@ -7245,6 +7478,10 @@ GitEngine.prototype.makeBranch = function(id, target) {
     });
   }
 
+  this.makeBranch(id, target);
+};
+
+GitEngine.prototype.makeBranch = function(id, target) {
   var branch = new Branch({
     target: target,
     id: id
@@ -7293,15 +7530,33 @@ GitEngine.prototype.printBranches = function(branches) {
   });
 };
 
+GitEngine.prototype.getUniqueID = function() {
+  var id = this.uniqueId('C');
+
+  var hasID = _.bind(function(idToCheck) {
+    // loop through and see if we have it locally or
+    // remotely
+    if (this.refs[idToCheck]) {
+      return true;
+    }
+    if (this.origin && this.origin.refs[idToCheck]) {
+      return true;
+    }
+    return false;
+  }, this);
+
+  while (hasID(id)) {
+    id = this.uniqueId('C');
+  }
+  return id;
+};
+
 GitEngine.prototype.makeCommit = function(parents, id, options) {
   // ok we need to actually manually create commit IDs now because
   // people like nikita (thanks for finding this!) could
   // make branches named C2 before creating the commit C2
   if (!id) {
-    id = this.uniqueId('C');
-    while (this.refs[id]) {
-      id = this.uniqueId('C');
-    }
+    id = this.getUniqueID();
   }
 
   var commit = new Commit(_.extend({
@@ -7513,6 +7768,95 @@ GitEngine.prototype.cherrypickStarter = function() {
   this.animationFactory.rebaseAnimation(this.animationQueue, animationResponse, this, this.gitVisuals);
 };
 
+/*************************************
+ * Origin stuff!
+ ************************************/
+
+GitEngine.prototype.fetchStarter = function() {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  this.fetch();
+};
+
+GitEngine.prototype.fetch = function() {
+  // TODO refactor to use rebase animation stuff!!
+  // ok so we essentially are always in "-force" mode, since we always assume
+  // the origin commits are downstream of where we are. Here is the outline:
+  //
+  // first we get the commits we need by exporting the origin tree and
+  // walking upwards until we hit the upstream set defined by origin/master.
+  //
+  // then we simply set the target of o/master to the target of master on
+  // the origin branch
+  var oldCommits = this.exportTree().commits;
+  // HAX HAX omg we will abuse our tree instantiation here :D
+  var originTree = this.origin.exportTree();
+  _.each(originTree.commits, function(commit, id) {
+    // if we have it, no worries
+    if (this.refs[id]) {
+      return;
+    }
+    // go make it!
+    var downloadedCommit = this.getOrMakeRecursive(originTree, this.refs, id);
+    this.commitCollection.add(downloadedCommit);
+  }, this);
+
+  // since we now might have many commits more than before, lets
+  // check all the ones that didn't use to exist and make animations
+  var newCommits = this.exportTree().commits;
+  var commitsToAnimate = [];
+  _.each(newCommits, function(commit, id) {
+    if (oldCommits[id]) {
+      return;
+    }
+    commitsToAnimate.push(this.refs[id]);
+  }, this);
+
+  // now sort by id...
+  commitsToAnimate.sort(_.bind(this.idSortFunc, this));
+
+  _.each(commitsToAnimate, function(newCommit) {
+    this.animationFactory.genCommitBirthAnimation(
+      this.animationQueue,
+      newCommit,
+      this.gitVisuals
+    );
+  }, this);
+
+  var originLocation = this.origin.exportTree().branches.master.target;
+  // yay! now we just set o/master and do a simple refresh
+  this.setTargetLocation(this.refs['o/master'], this.refs[originLocation]);
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+};
+
+GitEngine.prototype.originInitStarter = function() {
+  this.acceptNoGeneralArgs();
+  this.makeOrigin(this.printTree(this.exportTreeForBranch('master')));
+};
+
+GitEngine.prototype.fakeTeamworkStarter = function() {
+  this.acceptNoGeneralArgs();
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+
+  var id = this.getUniqueID();
+  this.origin.receiveTeamwork(id, this.animationQueue);
+};
+
+GitEngine.prototype.receiveTeamwork = function(id, animationQueue) {
+  var newCommit = this.makeCommit([this.getCommitFromRef('HEAD')], id);
+  this.setTargetLocation(this.HEAD, newCommit);
+
+  this.animationFactory.genCommitBirthAnimation(animationQueue, newCommit, this.gitVisuals);
+};
+
 GitEngine.prototype.cherrypick = function(ref) {
   var commit = this.getCommitFromRef(ref);
 
@@ -7644,6 +7988,7 @@ GitEngine.prototype.resolveRelativeRef = function(commit, relative) {
 };
 
 GitEngine.prototype.resolveStringRef = function(ref) {
+  ref = this.crappyUnescape(ref);
   if (this.refs[ref]) {
     return this.refs[ref];
   }
@@ -8222,7 +8567,7 @@ GitEngine.prototype.checkoutStarter = function() {
 
   this.validateArgBounds(this.generalArgs, 1, 1);
 
-  this.checkout(this.unescapeQuotes(this.generalArgs[0]));
+  this.checkout(this.crappyUnescape(this.generalArgs[0]));
 };
 
 GitEngine.prototype.checkout = function(idOrTarget) {
@@ -8234,6 +8579,11 @@ GitEngine.prototype.checkout = function(idOrTarget) {
   }
 
   var type = target.get('type');
+  // check if this is an origin branch, and if so go to the commit referenced
+  if (type === 'branch' && target.getIsRemote()) {
+    target = this.getCommitFromRef(target.get('id'));
+  }
+
   if (type !== 'branch' && type !== 'commit') {
     throw new GitError({
       msg: intl.str('git-error-options')
@@ -8302,7 +8652,7 @@ GitEngine.prototype.forceBranch = function(branchName, where) {
 
 GitEngine.prototype.branch = function(name, ref) {
   var target = this.getCommitFromRef(ref);
-  this.makeBranch(name, target);
+  this.validateAndMakeBranch(name, target);
 };
 
 GitEngine.prototype.deleteBranch = function(name) {
@@ -8330,8 +8680,8 @@ GitEngine.prototype.deleteBranch = function(name) {
   }
 };
 
-GitEngine.prototype.unescapeQuotes = function(str) {
-  return str.replace(/&#x27;/g, "'");
+GitEngine.prototype.crappyUnescape = function(str) {
+  return str.replace(/&#x27;/g, "'").replace(/&#x2F;/g, '/');
 };
 
 GitEngine.prototype.filterError = function(err) {
@@ -8339,6 +8689,16 @@ GitEngine.prototype.filterError = function(err) {
       err instanceof CommandResult)) {
     throw err;
   }
+};
+
+// called on a origin repo from a local -- simply refresh immediately with
+// an animation
+GitEngine.prototype.externalRefresh = function() {
+  this.animationQueue = new AnimationQueue({
+    callback: function() {}
+  });
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  this.animationQueue.start();
 };
 
 GitEngine.prototype.dispatch = function(command, deferred) {
@@ -8550,6 +8910,14 @@ var Ref = Backbone.Model.extend({
     }
   },
 
+  getIsRemote: function() {
+    return false;
+  },
+
+  getName: function() {
+    return this.get('id');
+  },
+
   targetChanged: function(model, targetValue, ev) {
     // push our little 3 stack back. we need to do this because
     // backbone doesn't give you what the value WAS, only what it was changed
@@ -8565,7 +8933,12 @@ var Ref = Backbone.Model.extend({
 
 var Branch = Ref.extend({
   defaults: {
-    visBranch: null
+    visBranch: null,
+    remote: false
+  },
+
+  getIsRemote: function() {
+    return this.get('remote');
   },
 
   initialize: function() {
@@ -9348,6 +9721,124 @@ exports.TreeCompare = TreeCompare;
 
 });
 
+require.define("/src/js/util/eventBaton.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
+
+function EventBaton() {
+  this.eventMap = {};
+}
+
+// this method steals the "baton" -- aka, only this method will now
+// get called. analogous to events.on
+// EventBaton.prototype.on = function(name, func, context) {
+EventBaton.prototype.stealBaton = function(name, func, context) {
+  if (!name) { throw new Error('need name'); }
+  if (!func) { throw new Error('need func!'); }
+
+  var listeners = this.eventMap[name] || [];
+  listeners.push({
+    func: func,
+    context: context
+  });
+  this.eventMap[name] = listeners;
+};
+
+EventBaton.prototype.sliceOffArgs = function(num, args) {
+  var newArgs = [];
+  for (var i = num; i < args.length; i++) {
+    newArgs.push(args[i]);
+  }
+  return newArgs;
+};
+
+EventBaton.prototype.trigger = function(name) {
+  // arguments is weird and doesnt do slice right
+  var argsToApply = this.sliceOffArgs(1, arguments);
+
+  var listeners = this.eventMap[name];
+  if (!listeners || !listeners.length) {
+    console.warn('no listeners for', name);
+    return;
+  }
+
+  // call the top most listener with context and such
+  var toCall = listeners.slice(-1)[0];
+  toCall.func.apply(toCall.context, argsToApply);
+};
+
+EventBaton.prototype.getNumListeners = function(name) {
+  var listeners = this.eventMap[name] || [];
+  return listeners.length;
+};
+
+EventBaton.prototype.getListenersThrow = function(name) {
+  var listeners = this.eventMap[name];
+  if (!listeners || !listeners.length) {
+    throw new Error('no one has that baton!' + name);
+  }
+  return listeners;
+};
+
+EventBaton.prototype.passBatonBackSoft = function(name, func, context, args) {
+  try {
+    return this.passBatonBack(name, func, context, args);
+  } catch (e) {
+  }
+};
+
+EventBaton.prototype.passBatonBack = function(name, func, context, args) {
+  // this method will call the listener BEFORE the name/func pair. this
+  // basically allows you to put in shims, where you steal batons but pass
+  // them back if they don't meet certain conditions
+  var listeners = this.getListenersThrow(name);
+
+  var indexBefore;
+  _.each(listeners, function(listenerObj, index) {
+    // skip the first
+    if (index === 0) { return; }
+    if (listenerObj.func === func && listenerObj.context === context) {
+      indexBefore = index - 1;
+    }
+  }, this);
+  if (indexBefore === undefined) {
+    throw new Error('you are the last baton holder! or i didnt find you');
+  }
+  var toCallObj = listeners[indexBefore];
+
+  toCallObj.func.apply(toCallObj.context, args);
+};
+
+EventBaton.prototype.releaseBaton = function(name, func, context) {
+  // might be in the middle of the stack, so we have to loop instead of
+  // just popping blindly
+  var listeners = this.getListenersThrow(name);
+
+  var newListeners = [];
+  var found = false;
+  _.each(listeners, function(listenerObj) {
+    if (listenerObj.func === func && listenerObj.context === context) {
+      if (found) {
+        console.warn('woah duplicates!!!');
+        console.log(listeners);
+      }
+      found = true;
+    } else {
+      newListeners.push(listenerObj);
+    }
+  }, this);
+
+  if (!found) {
+    console.log('did not find that function', func, context, name, arguments);
+    console.log(this.eventMap);
+    throw new Error('cant releasebaton if yu dont have it');
+  }
+  this.eventMap[name] = newListeners;
+};
+
+exports.EventBaton = EventBaton;
+
+
+});
+
 require.define("/src/js/views/rebaseView.js",function(require,module,exports,__dirname,__filename,process,global){var GitError = require('../util/errors').GitError;
 var _ = require('underscore');
 var Q = require('q');
@@ -9517,6 +10008,7 @@ var Backbone = (!require('../util').isBrowser()) ? require('backbone') : window.
 
 var Main = require('../app');
 var intl = require('../intl');
+var log = require('../log');
 var Constants = require('../util/constants');
 var KeyboardListener = require('../util/keyboard').KeyboardListener;
 var GitError = require('../util/errors').GitError;
@@ -10173,6 +10665,11 @@ var IntlHelperBar = HelperBar.extend({
     }];
   },
 
+  fireCommand: function() {
+    log.viewInteracted('intlSelect');
+    HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
   onJapaneseClick: function() {
     this.fireCommand('locale ja; levels');
     this.hide();
@@ -10219,6 +10716,11 @@ var CommandsHelperBar = HelperBar.extend({
     }];
   },
 
+  fireCommand: function() {
+    log.viewInteracted('helperBar');
+    HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
   onLevelsClick: function() {
     this.fireCommand('levels');
   },
@@ -10249,10 +10751,12 @@ var MainHelperBar = HelperBar.extend({
 
   onIntlClick: function() {
     this.showDeferMe(this.intlHelper);
+    log.viewInteracted('openIntlBar');
   },
 
   onCommandsClick: function() {
     this.showDeferMe(this.commandsHelper);
+    log.viewInteracted('openCommandsBar');
   },
 
   setupChildren: function() {
@@ -12841,7 +13345,10 @@ var regexMap = {
   'git merge': /^git +merge($|\s)/,
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
-  'git cherry-pick': /^git +cherry-pick($|\s)/
+  'git cherry-pick': /^git +cherry-pick($|\s)/,
+  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fetch': /^git +fetch *?$/,
+  'git originInit': /^git +originInit *?$/
 };
 
 var parse = function(str) {
@@ -12925,7 +13432,10 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-i': false // the mother of all options
     },
     revert: {},
-    show: {}
+    show: {},
+    originInit: {},
+    fetch: {},
+    fakeTeamwork: {}
   };
 };
 
@@ -13341,6 +13851,7 @@ var LevelBuilder = Level.extend({
       containerElement: this.startCanvasHolder.getCanvasLocation(),
       treeString: this.level.startTree,
       noKeyboardInput: true,
+      smallCanvas: true,
       noClick: true
     });
     return this.startCanvasHolder;
@@ -14638,124 +15149,6 @@ require.define("/src/js/dialogs/levelBuilder.js",function(require,module,exports
 
 });
 
-require.define("/src/js/util/eventBaton.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
-
-function EventBaton() {
-  this.eventMap = {};
-}
-
-// this method steals the "baton" -- aka, only this method will now
-// get called. analogous to events.on
-// EventBaton.prototype.on = function(name, func, context) {
-EventBaton.prototype.stealBaton = function(name, func, context) {
-  if (!name) { throw new Error('need name'); }
-  if (!func) { throw new Error('need func!'); }
-
-  var listeners = this.eventMap[name] || [];
-  listeners.push({
-    func: func,
-    context: context
-  });
-  this.eventMap[name] = listeners;
-};
-
-EventBaton.prototype.sliceOffArgs = function(num, args) {
-  var newArgs = [];
-  for (var i = num; i < args.length; i++) {
-    newArgs.push(args[i]);
-  }
-  return newArgs;
-};
-
-EventBaton.prototype.trigger = function(name) {
-  // arguments is weird and doesnt do slice right
-  var argsToApply = this.sliceOffArgs(1, arguments);
-
-  var listeners = this.eventMap[name];
-  if (!listeners || !listeners.length) {
-    console.warn('no listeners for', name);
-    return;
-  }
-
-  // call the top most listener with context and such
-  var toCall = listeners.slice(-1)[0];
-  toCall.func.apply(toCall.context, argsToApply);
-};
-
-EventBaton.prototype.getNumListeners = function(name) {
-  var listeners = this.eventMap[name] || [];
-  return listeners.length;
-};
-
-EventBaton.prototype.getListenersThrow = function(name) {
-  var listeners = this.eventMap[name];
-  if (!listeners || !listeners.length) {
-    throw new Error('no one has that baton!' + name);
-  }
-  return listeners;
-};
-
-EventBaton.prototype.passBatonBackSoft = function(name, func, context, args) {
-  try {
-    return this.passBatonBack(name, func, context, args);
-  } catch (e) {
-  }
-};
-
-EventBaton.prototype.passBatonBack = function(name, func, context, args) {
-  // this method will call the listener BEFORE the name/func pair. this
-  // basically allows you to put in shims, where you steal batons but pass
-  // them back if they don't meet certain conditions
-  var listeners = this.getListenersThrow(name);
-
-  var indexBefore;
-  _.each(listeners, function(listenerObj, index) {
-    // skip the first
-    if (index === 0) { return; }
-    if (listenerObj.func === func && listenerObj.context === context) {
-      indexBefore = index - 1;
-    }
-  }, this);
-  if (indexBefore === undefined) {
-    throw new Error('you are the last baton holder! or i didnt find you');
-  }
-  var toCallObj = listeners[indexBefore];
-
-  toCallObj.func.apply(toCallObj.context, args);
-};
-
-EventBaton.prototype.releaseBaton = function(name, func, context) {
-  // might be in the middle of the stack, so we have to loop instead of
-  // just popping blindly
-  var listeners = this.getListenersThrow(name);
-
-  var newListeners = [];
-  var found = false;
-  _.each(listeners, function(listenerObj) {
-    if (listenerObj.func === func && listenerObj.context === context) {
-      if (found) {
-        console.warn('woah duplicates!!!');
-        console.log(listeners);
-      }
-      found = true;
-    } else {
-      newListeners.push(listenerObj);
-    }
-  }, this);
-
-  if (!found) {
-    console.log('did not find that function', func, context, name, arguments);
-    console.log(this.eventMap);
-    throw new Error('cant releasebaton if yu dont have it');
-  }
-  this.eventMap[name] = newListeners;
-};
-
-exports.EventBaton = EventBaton;
-
-
-});
-
 require.define("/src/js/visuals/index.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 var Q = require('q');
 var Backbone = require('backbone');
@@ -14776,6 +15169,7 @@ var VisEdgeCollection = require('../visuals/visEdge').VisEdgeCollection;
 function GitVisuals(options) {
   options = options || {};
   this.options = options;
+  this.visualization = options.visualization;
   this.commitCollection = options.commitCollection;
   this.branchCollection = options.branchCollection;
   this.visNodeMap = {};
@@ -14796,11 +15190,6 @@ function GitVisuals(options) {
   this.branchCollection.on('remove', this.removeBranch, this);
   this.deferred = [];
 
-  // eventually have origin support here
-  this.posBoundaries = {
-    min: 0,
-    max: 1
-  };
   this.flipFraction = 0.65;
 
   var Main = require('../app');
@@ -14854,6 +15243,10 @@ GitVisuals.prototype.assignGitEngine = function(gitEngine) {
   this.deferFlush();
 };
 
+GitVisuals.prototype.getVisualization = function() {
+  return this.visualization;
+};
+
 GitVisuals.prototype.initHeadBranch = function() {
   // it's unfortaunte we have to do this, but the head branch
   // is an edge case because it's not part of a collection so
@@ -14874,9 +15267,28 @@ GitVisuals.prototype.getScreenPadding = function() {
   };
 };
 
+GitVisuals.prototype.getPosBoundaries = function() {
+  if (this.gitEngine.hasOrigin()) {
+    return {
+      min: 0,
+      max: 0.5
+    };
+  } else if (this.gitEngine.isOrigin()) {
+    return {
+      min: 0.5,
+      max: 1
+    };
+  }
+  return {
+    min: 0,
+    max: 1
+  };
+};
+
 GitVisuals.prototype.getFlipPos = function() {
-  var min = this.posBoundaries.min;
-  var max = this.posBoundaries.max;
+  var bounds = this.getPosBoundaries();
+  var min = bounds.min;
+  var max = bounds.max;
   return this.flipFraction * (max - min) + min;
 };
 
@@ -15230,10 +15642,11 @@ GitVisuals.prototype.calcBranchStacks = function() {
 GitVisuals.prototype.calcWidth = function() {
   this.maxWidthRecursive(this.rootCommit);
 
+  var bounds = this.getPosBoundaries();
   this.assignBoundsRecursive(
     this.rootCommit,
-    this.posBoundaries.min,
-    this.posBoundaries.max
+    bounds.min,
+    bounds.max
   );
 };
 
@@ -15253,10 +15666,9 @@ GitVisuals.prototype.maxWidthRecursive = function(commit) {
   return maxWidth;
 };
 
-GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFrac) {
-  centerFrac = (centerFrac === undefined) ? 0.5 : centerFrac;
+GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max) {
   // I always position myself within my bounds
-  var myWidthPos = min + (max - min) * centerFrac;
+  var myWidthPos = (max + min) / 2.0;
   commit.get('visNode').get('pos').x = myWidthPos;
 
   if (commit.get('children').length === 0) {
@@ -15275,28 +15687,6 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
     }
   }, this);
 
-  // TODO: refactor into another method
-  var getCenterFrac = function(index, centerFrac) {
-    if (myLength < 0.99) {
-      if (children.length < 2) {
-        return centerFrac;
-      } else {
-        return 0.5;
-      }
-    }
-    if (children.length < 2) {
-      return 0.5;
-    }
-    // we introduce a VERY specific rule here, to push out
-    // the first "divergence" of the graph
-    if (index === 0) {
-      return 1/3;
-    } else if (index === children.length - 1) {
-      return 2/3;
-    }
-    return centerFrac;
-  };
-
   var prevBound = min;
   _.each(children, function(child, index) {
     if (!child.isMainParent(commit)) {
@@ -15305,12 +15695,11 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
 
     var flex = child.get('visNode').getMaxWidthScaled();
     var portion = (flex / totalFlex) * myLength;
-    var thisCenterFrac = getCenterFrac(index, centerFrac);
 
     var childMin = prevBound;
     var childMax = childMin + portion;
 
-    this.assignBoundsRecursive(child, childMin, childMax, thisCenterFrac);
+    this.assignBoundsRecursive(child, childMin, childMax);
     prevBound = childMin + portion;
   }, this);
 };
@@ -15324,7 +15713,7 @@ GitVisuals.prototype.calcDepth = function() {
 
   var depthIncrement = this.getDepthIncrement(maxDepth);
   _.each(this.visNodeMap, function(visNode) {
-    visNode.setDepthBasedOn(depthIncrement);
+    visNode.setDepthBasedOn(depthIncrement, this.getHeaderOffset());
   }, this);
 };
 
@@ -15405,15 +15794,25 @@ GitVisuals.prototype.animateEdges = function(speed) {
 };
 
 GitVisuals.prototype.getMinLayers = function() {
-  return (this.options.smallCanvas) ? 4 : 7;
+  return (this.options.smallCanvas) ? 2 : 7;
 };
 
 GitVisuals.prototype.getDepthIncrement = function(maxDepth) {
   // assume there are at least a number of layers until later
   // to have better visuals
   maxDepth = Math.max(maxDepth, this.getMinLayers());
-  var increment = 1.0 / maxDepth;
+  // if we have a header, reserve space for that
+  var vSpace = 1.0 - this.getHeaderOffset();
+  var increment = vSpace / maxDepth;
   return increment;
+};
+
+GitVisuals.prototype.shouldHaveHeader = function() {
+  return this.gitEngine.isOrigin() || this.gitEngine.hasOrigin();
+};
+
+GitVisuals.prototype.getHeaderOffset = function() {
+  return (this.shouldHaveHeader()) ? 0.05 : 0;
 };
 
 GitVisuals.prototype.calcDepthRecursive = function(commit, depth) {
@@ -15652,13 +16051,12 @@ var VisNode = VisBase.extend({
     this.set('depth', Math.max(this.get('depth') || 0, depth));
   },
 
-  setDepthBasedOn: function(depthIncrement) {
+  setDepthBasedOn: function(depthIncrement, offset) {
     if (this.get('depth') === undefined) {
-      debugger;
       throw new Error('no depth yet!');
     }
     var pos = this.get('pos');
-    pos.y = this.get('depth') * depthIncrement;
+    pos.y = this.get('depth') * depthIncrement + offset;
   },
 
   getMaxWidthScaled: function() {
@@ -15701,6 +16099,8 @@ var VisNode = VisBase.extend({
     var pos = this.getScreenCoords();
     var textPos = this.getTextScreenCoords();
     var opacity = this.getOpacity();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
 
     return {
       circle: {
@@ -15710,6 +16110,7 @@ var VisNode = VisBase.extend({
         r: this.getRadius(),
         fill: this.getFill(),
         'stroke-width': this.get('stroke-width'),
+        'stroke-dasharray': dashArray,
         stroke: this.get('stroke')
       },
       text: {
@@ -15754,18 +16155,15 @@ var VisNode = VisBase.extend({
     this.animateToAttr(snapShot[this.getID()], speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('circle').attr(attr.circle);
-      this.get('text').attr(attr.text);
-      return;
-    }
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'circle'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
+  },
 
+  animateToAttr: function(attr, speed, easing) {
+    VisBase.prototype.animateToAttr.apply(this, arguments);
     var s = speed !== undefined ? speed : this.get('animationSpeed');
     var e = easing || this.get('animationEasing');
-
-    this.get('circle').stop().animate(attr.circle, s, e);
-    this.get('text').stop().animate(attr.text, s, e);
 
     if (easing == 'bounce' &&
         attr.circle && attr.circle.cx !== undefined &&
@@ -15870,7 +16268,8 @@ var VisNode = VisBase.extend({
     _.each(this.get('outgoingEdges'), function(edge) {
       var headPos = edge.get('head').getScreenCoords();
       var path = edge.genSmoothBezierPathStringFromCoords(parentCoords, headPos);
-      edge.get('path').stop().attr({
+      edge.get('path').stop();
+      edge.get('path').attr({
         path: path,
         opacity: 0
       });
@@ -16043,6 +16442,51 @@ var VisBase = Backbone.Model.extend({
     }, this);
   },
 
+  getNonAnimateKeys: function() {
+    return [
+      'stroke-dasharray'
+    ];
+  },
+
+  getIsInOrigin: function() {
+    if (!this.get('gitEngine')) {
+      return false;
+    }
+    return this.get('gitEngine').isOrigin();
+  },
+
+  animateToAttr: function(attr, speed, easing) {
+    if (speed === 0) {
+      this.setAttr(attr, /* instant */ true);
+      return;
+    }
+
+    var s = speed !== undefined ? speed : this.get('animationSpeed');
+    var e = easing || this.get('animationEasing');
+    this.setAttr(attr, /* instance */ false, s, e);
+  },
+
+  setAttrBase: function(keys, attr, instant, speed, easing) {
+    _.each(keys, function(key) {
+      if (instant) {
+        this.get(key).attr(attr[key]);
+      } else {
+        this.get(key).stop();
+        this.get(key).animate(attr[key], speed, easing);
+        // some keys dont support animating too, so set those instantly here
+        _.forEach(this.getNonAnimateKeys(), function(nonAnimateKey) {
+          if (attr[key] && attr[key][nonAnimateKey] !== undefined) {
+            this.get(key).attr(nonAnimateKey, attr[key][nonAnimateKey]);
+          }
+        }, this);
+      }
+
+      if (attr.css) {
+        $(this.get(key).node).css(attr.css);
+      }
+    }, this);
+  },
+
   animateAttrKeys: function(keys, attrObj, speed, easing) {
     // either we animate a specific subset of keys or all
     // possible things we could animate
@@ -16166,23 +16610,18 @@ var VisBranch = VisBase.extend({
     var threshold = this.get('gitVisuals').getFlipPos();
     var overThreshold = (visNode.get('pos').x > threshold);
 
+    // easy logic first
     if (!this.get('isHead')) {
-      // easy logic first
-      return (overThreshold) ?
-        -1 :
-        1;
+      return (overThreshold) ? -1 : 1;
     }
+
     // now for HEAD....
     if (overThreshold) {
       // if by ourselves, then feel free to squeeze in. but
       // if other branches are here, then we need to show separate
-      return (this.isBranchStackEmpty()) ?
-        -1 :
-        1;
+      return (this.isBranchStackEmpty()) ? -1 : 1;
     } else {
-      return (this.isBranchStackEmpty()) ?
-        1 :
-        -1;
+      return (this.isBranchStackEmpty()) ? 1 : -1;
     }
   },
 
@@ -16371,12 +16810,17 @@ var VisBranch = VisBase.extend({
     };
   },
 
-  getName: function() {
-    var name = this.get('branch').get('id');
-    var selected = this.gitEngine.HEAD.get('target').get('id');
+  getIsRemote: function() {
+    return this.get('branch').getIsRemote();
+  },
 
-    var add = (selected == name) ? '*' : '';
-    return name + add;
+  getName: function() {
+    var name = this.get('branch').getName();
+    var selected = this.get('branch') === this.gitEngine.HEAD.get('target');
+    var isRemote = this.getIsRemote();
+
+    var after = (selected && !this.getIsInOrigin() && !isRemote) ? '*' : '';
+    return name + after;
   },
 
   nonTextToFront: function() {
@@ -16428,19 +16872,26 @@ var VisBranch = VisBase.extend({
       opacity: this.getTextOpacity()
     });
     this.set('text', text);
+    var attr = this.getAttributes();
 
     var rectPos = this.getRectPosition();
     var sizeOfRect = this.getRectSize();
     var rect = paper
       .rect(rectPos.x, rectPos.y, sizeOfRect.w, sizeOfRect.h, 8)
-      .attr(this.getAttributes().rect);
+      .attr(attr.rect);
     this.set('rect', rect);
 
     var arrowPath = this.getArrowPath();
     var arrow = paper
       .path(arrowPath)
-      .attr(this.getAttributes().arrow);
+      .attr(attr.arrow);
     this.set('arrow', arrow);
+
+    // set CSS
+    var keys = ['text', 'rect', 'arrow'];
+    _.each(keys, function(key) {
+      $(this.get(key).node).css(attr.css);
+    }, this);
 
     this.attachClickHandlers();
     rect.toFront();
@@ -16451,16 +16902,29 @@ var VisBranch = VisBase.extend({
     if (this.get('gitVisuals').options.noClick) {
       return;
     }
-    var commandStr = 'git checkout ' + this.get('branch').get('id');
-    var Main = require('../app');
-    var objs = [this.get('rect'), this.get('text'), this.get('arrow')];
+    var objs = [
+      this.get('rect'),
+      this.get('text'),
+      this.get('arrow')
+    ];
 
     _.each(objs, function(rObj) {
-      rObj.click(function() {
-        Main.getEventBaton().trigger('commandSubmitted', commandStr);
-      });
-      $(rObj.node).css('cursor', 'pointer');
-    });
+      rObj.click(_.bind(this.onClick ,this));
+    }, this);
+  },
+
+  shouldDisableClick: function() {
+    return this.get('isHead') && !this.gitEngine.getDetachedHead();
+  },
+
+  onClick: function() {
+    if (this.shouldDisableClick()) {
+      return;
+    }
+
+    var commandStr = 'git checkout ' + this.get('branch').get('id');
+    var Main = require('../app');
+    Main.getEventBaton().trigger('commandSubmitted', commandStr);
   },
 
   updateName: function() {
@@ -16493,8 +16957,16 @@ var VisBranch = VisBase.extend({
     var rectSize = this.getRectSize();
 
     var arrowPath = this.getArrowPath();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
+    var cursorStyle = (this.shouldDisableClick()) ?
+      'auto' :
+      'pointer';
 
     return {
+      css: {
+        cursor: cursorStyle
+      },
       text: {
         x: textPos.x,
         y: textPos.y,
@@ -16508,6 +16980,7 @@ var VisBranch = VisBase.extend({
         opacity: nonTextOpacity,
         fill: this.getFill(),
         stroke: this.get('stroke'),
+        //'stroke-dasharray': dashArray,
         'stroke-width': this.get('stroke-width')
       },
       arrow: {
@@ -16531,20 +17004,9 @@ var VisBranch = VisBase.extend({
     this.animateToAttr(toAttr, speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('text').attr(attr.text);
-      this.get('rect').attr(attr.rect);
-      this.get('arrow').attr(attr.arrow);
-      return;
-    }
-
-    var s = speed !== undefined ? speed : this.get('animationSpeed');
-    var e = easing || this.get('animationEasing');
-
-    this.get('text').stop().animate(attr.text, s, e);
-    this.get('rect').stop().animate(attr.rect, s, e);
-    this.get('arrow').stop().animate(attr.arrow, s, e);
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'rect', 'arrow'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
   }
 });
 
@@ -16728,7 +17190,8 @@ var VisEdge = VisBase.extend({
     }
 
     this.get('path').toBack();
-    this.get('path').stop().animate(
+    this.get('path').stop();
+    this.get('path').animate(
       attr.path,
       speed !== undefined ? speed : this.get('animationSpeed'),
       easing || this.get('animationEasing')
@@ -17017,7 +17480,7 @@ exports.sequenceInfo = {
       'en_US': 'Introduction Sequence',
       'ja': 'まずはここから',
       'fr_FR': 'Sequence d\'introduction',
-      'zh_CN': '序列简介',
+      'zh_CN': '基础篇',
       'ko': '기본 명령어'
     },
     about: {
@@ -17037,7 +17500,7 @@ exports.sequenceInfo = {
     about: {
       'en_US': 'The next serving of 100% git awesomes-ness. Hope you\'re hungry',
       'ja': '更にgitの素晴らしさを堪能しよう',
-      'zh_CN': '接下来是git的超赞特性。迫不及待了吧!'
+      'zh_CN': '接下来是git的超赞特性。迫不及待了吧！'
     }
   },
   rebase: {
@@ -17387,7 +17850,7 @@ require.define("/levels/intro/branching.js",function(require,module,exports,__di
             "beforeMarkdowns": [
               "Let's see what branches look like in practice.",
               "",
-              "Here we will check out a new branch named `newImage`"
+              "Here we will create a new branch named `newImage`"
             ],
             "afterMarkdowns": [
               "There, that's all there is to branching! The branch `newImage` now refers to commit `C1`"
@@ -17821,7 +18284,7 @@ require.define("/levels/intro/merging.js",function(require,module,exports,__dirn
             "afterMarkdowns": [
               "Since `bugFix` was downstream of `master`, git didn't have to do any work; it simply just moved `bugFix` to the same commit `master` was attached to.",
               "",
-              "Now all the commits are the same color, which means each branch contains all the work in the repository! Woohoo"
+              "Now all the commits are the same color, which means each branch contains all the work in the repository! Woohoo!"
             ],
             "command": "git checkout bugFix; git merge master",
             "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit; git merge bugFix"
@@ -17959,7 +18422,7 @@ require.define("/levels/intro/merging.js",function(require,module,exports,__dirn
             "afterMarkdowns": [
               "Puisque `bugFix` était un descendant de `master`, git n'avait aucun travail à effectuer; il a simplement déplacé `bugFix` au même commit auquel `master` est attaché.",
               "",
-              "Maintenant tous les commits sont de la même couleur, ce qui indique que chaque branche contient tout le contenu du dépôt ! Woohoo"
+              "Maintenant tous les commits sont de la même couleur, ce qui indique que chaque branche contient tout le contenu du dépôt ! Woohoo!"
             ],
             "command": "git checkout bugFix; git merge master",
             "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit; git merge bugFix"
@@ -18189,7 +18652,7 @@ require.define("/levels/intro/rebasing.js",function(require,module,exports,__dir
           "type": "GitDemonstrationView",
           "options": {
             "beforeMarkdowns": [
-              "Now we are checked out on the `master` branch. Let's do ahead and rebase onto `bugFix`..."
+              "Now we are checked out on the `master` branch. Let's go ahead and rebase onto `bugFix`..."
             ],
             "afterMarkdowns": [
               "There! Since `master` was downstream of `bugFix`, git simply moved the `master` branch reference forward in history."
@@ -18931,7 +19394,7 @@ require.define("/levels/rampup/relativeRefs2.js",function(require,module,exports
               "",
               "你现在是相对引用的高手了，现在*用*他来实际做点事情。",
               "",
-              "我使用相对引用最多的就是移动分支。你可以使用`-f`选项把直接让分支指向另一个提交亡灵。举个例子:",
+              "我使用相对引用最多的就是移动分支。你可以使用`-f`选项把直接让分支指向另一个提交。举个例子:",
               "",
               "`git branch -f master HEAD~3`",
               "",
@@ -19411,7 +19874,7 @@ require.define("/levels/mixed/grabbingOneCommit.js",function(require,module,expo
     "ko": "딱 한개의 커밋만 가져오기",
     "en_US": "Grabbing Just 1 Commit",
     "ja": "Grabbing Just 1 Commit",
-    "zh_CN": "私藏一个提交"
+    "zh_CN": "只取一个提交"
   },
   "hint": {
     "en_US": "Remember, interactive rebase or cherry-pick is your friend here",
@@ -19510,11 +19973,11 @@ require.define("/levels/mixed/grabbingOneCommit.js",function(require,module,expo
             "markdowns": [
               "## 本地栈式提交 (Locally stacked commits)",
               "",
-              "设想一下一个经常发生的场景：我在追踪一个有点棘手的 bug，为了更好地排查，我添加了一些 debug 语句和打印语句。",
+              "设想一下一个经常发生的场景：我在追踪一个有点棘手的 bug，为了更好地排查，我添加了一些调试命令和打印语句。",
               "",
-              "所有的这些调试和打印语句到只在它们的分支里。最终我终于找到这个 bug，揪出来 fix 掉，然后撒花庆祝！",
+              "所有的这些调试和打印语句都只在它们自己的分支里。最终我终于找到这个 bug，揪出来 fix 掉，然后撒花庆祝！",
               "",
-              "但有个问题就是现在我要把 `bugFix` 分支的工作合并回 `master` 分支上，我可以简单地快进（fast-forward） `master` 分支，但这样的话 `master` 分支就会包含我这些调试语句了。"
+              "现在唯一的问题就是要把我在 `bugFix` 分支里的工作合并回 `master` 分支。我可以简单地把 `master` 分支快进（fast-forward），但这样的话 `master` 分支就会包含我这些调试语句了。"
             ]
           }
         },
@@ -19522,7 +19985,7 @@ require.define("/levels/mixed/grabbingOneCommit.js",function(require,module,expo
           "type": "ModalAlert",
           "options": {
             "markdowns": [
-              "现在就是 Git 大显神通的时候啦。我们有几种方法来解决这个问题，但最直接的方法是：",
+              "现在就是 Git 大显神通的时候啦。解决这个问题的方法不止一个，但最直接的两个方法是：",
               "",
               "* `git rebase -i`",
               "* `git cherry-pick`",
@@ -20290,6 +20753,7 @@ var Backbone = (!require('../util').isBrowser()) ? require('backbone') : window.
 
 var util = require('../util');
 var intl = require('../intl');
+var log = require('../log');
 var KeyboardListener = require('../util/keyboard').KeyboardListener;
 var Main = require('../app');
 
@@ -20515,6 +20979,9 @@ var LevelDropdownView = ContainedBase.extend({
         'commandSubmitted',
         'level ' + id
       );
+      var level = Main.getLevelArbiter().getLevel(id);
+      var name = level.name.en_US;
+      log.levelSelected(name);
     }
     this.hide();
   },
@@ -20628,6 +21095,7 @@ var Errors = require('../util/errors');
 var Warning = Errors.Warning;
 
 var util = require('../util');
+var log = require('../log');
 var keyboard = require('../util/keyboard');
 
 var CommandPromptView = Backbone.View.extend({
@@ -20849,6 +21317,7 @@ var CommandPromptView = Backbone.View.extend({
     if (this.commands.length > 100) {
       this.clearLocalStorage();
     }
+    log.commandEntered(value);
   },
 
   submitCommand: function(value) {
@@ -22039,7 +22508,10 @@ var regexMap = {
   'git merge': /^git +merge($|\s)/,
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
-  'git cherry-pick': /^git +cherry-pick($|\s)/
+  'git cherry-pick': /^git +cherry-pick($|\s)/,
+  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fetch': /^git +fetch *?$/,
+  'git originInit': /^git +originInit *?$/
 };
 
 var parse = function(str) {
@@ -22123,7 +22595,10 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-i': false // the mother of all options
     },
     revert: {},
-    show: {}
+    show: {},
+    originInit: {},
+    fetch: {},
+    fakeTeamwork: {}
   };
 };
 
@@ -22331,11 +22806,14 @@ var TreeCompare = require('./treeCompare').TreeCompare;
 var Errors = require('../util/errors');
 var GitError = Errors.GitError;
 var CommandResult = Errors.CommandResult;
+var EventBaton = require('../util/eventBaton').EventBaton;
 
 function GitEngine(options) {
   this.rootCommit = null;
   this.refs = {};
   this.HEAD = null;
+  this.origin = null;
+  this.localRepo = null;
 
   this.branchCollection = options.branches;
   this.commitCollection = options.collection;
@@ -22365,10 +22843,18 @@ GitEngine.prototype.initUniqueID = function() {
   })();
 };
 
+GitEngine.prototype.assignLocalRepo = function(repo) {
+  this.localRepo = repo;
+};
+
 GitEngine.prototype.defaultInit = function() {
-  // lol 80 char limit
-  var defaultTree = JSON.parse(unescape("%7B%22branches%22%3A%7B%22master%22%3A%7B%22target%22%3A%22C1%22%2C%22id%22%3A%22master%22%2C%22type%22%3A%22branch%22%7D%7D%2C%22commits%22%3A%7B%22C0%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C0%22%2C%22rootCommit%22%3Atrue%7D%2C%22C1%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%22C0%22%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C1%22%7D%7D%2C%22HEAD%22%3A%7B%22id%22%3A%22HEAD%22%2C%22target%22%3A%22master%22%2C%22type%22%3A%22general%20ref%22%7D%7D"));
+  var defaultTree = this.getDefaultTree();
   this.loadTree(defaultTree);
+};
+
+GitEngine.prototype.getDefaultTree = function() {
+  // lol 80 char limit
+  return JSON.parse(unescape("%7B%22branches%22%3A%7B%22master%22%3A%7B%22target%22%3A%22C1%22%2C%22id%22%3A%22master%22%2C%22type%22%3A%22branch%22%7D%7D%2C%22commits%22%3A%7B%22C0%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C0%22%2C%22rootCommit%22%3Atrue%7D%2C%22C1%22%3A%7B%22type%22%3A%22commit%22%2C%22parents%22%3A%5B%22C0%22%5D%2C%22author%22%3A%22Peter%20Cottle%22%2C%22createTime%22%3A%22Mon%20Nov%2005%202012%2000%3A56%3A47%20GMT-0800%20%28PST%29%22%2C%22commitMessage%22%3A%22Quick%20Commit.%20Go%20Bears%21%22%2C%22id%22%3A%22C1%22%7D%7D%2C%22HEAD%22%3A%7B%22id%22%3A%22HEAD%22%2C%22target%22%3A%22master%22%2C%22type%22%3A%22general%20ref%22%7D%7D"));
 };
 
 GitEngine.prototype.init = function() {
@@ -22385,6 +22871,42 @@ GitEngine.prototype.init = function() {
 
   // commit once to get things going
   this.commit();
+};
+
+GitEngine.prototype.hasOrigin = function() {
+  return !!this.origin;
+};
+
+GitEngine.prototype.isOrigin = function() {
+  return !!this.localRepo;
+};
+
+GitEngine.prototype.exportTreeForBranch = function(branchName) {
+  // this method exports the tree and then prunes everything that
+  // is not connected to branchname
+  var tree = this.exportTree();
+  // get the upstream set
+  var set = this.getUpstreamSet(branchName);
+  // now loop through and delete commits
+  var commitsToLoop = tree.commits;
+  tree.commits = {};
+  _.each(commitsToLoop, function(commit, id) {
+    if (set[id]) {
+      // if included in target branch
+      tree.commits[id] = commit;
+    }
+  });
+
+  var branchesToLoop = tree.branches;
+  tree.branches = {};
+  _.each(branchesToLoop, function(branch, id) {
+    if (id === branchName) {
+      tree.branches[id] = branch;
+    }
+  });
+
+  tree.HEAD.target = branchName;
+  return tree;
 };
 
 GitEngine.prototype.exportTree = function() {
@@ -22425,6 +22947,10 @@ GitEngine.prototype.exportTree = function() {
   HEAD.lastTarget = HEAD.lastLastTarget = HEAD.visBranch = undefined;
   HEAD.target = HEAD.target.get('id');
   totalExport.HEAD = HEAD;
+
+  if (this.hasOrigin()) {
+    totalExport.originTree = this.origin.exportTree();
+  }
 
   return totalExport;
 };
@@ -22493,19 +23019,57 @@ GitEngine.prototype.instantiateFromTree = function(tree) {
   this.branchCollection.each(function(branch) {
     this.gitVisuals.addBranch(branch);
   }, this);
+
+  if (tree.originTree) {
+    var treeString = JSON.stringify(tree.originTree);
+    this.makeOrigin(treeString);
+  }
 };
 
-GitEngine.prototype.reloadGraphics = function() {
-  // get the root commit
-  this.gitVisuals.rootCommit = this.refs['C0'];
-  // this just basically makes the HEAD branch. the head branch really should have been
-  // a member of a collection and not this annoying edge case stuff... one day
-  this.gitVisuals.initHeadBranch();
+GitEngine.prototype.makeOrigin = function(treeString) {
+  if (this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-exists')
+    });
+  }
+  treeString = treeString || this.printTree(this.exportTreeForBranch('master'));
 
-  // when the paper is ready
-  this.gitVisuals.drawTreeFromReload();
+  // this is super super ugly but a necessary hack because of the way LGB was
+  // originally designed. We need to get to the top level visualization from
+  // the git engine -- aka we need to access our own visuals, then the
+  // visualization and ask the main vis to create a new vis/git pair. Then
+  // we grab the gitengine out of that and assign that as our origin repo
+  // which connects the two. epic
+  var masterVis = this.gitVisuals.getVisualization();
+  var originVis = masterVis.makeOrigin({
+    localRepo: this,
+    treeString: treeString
+  });
 
-  this.gitVisuals.refreshTreeHarsh();
+  // defer the starting of our animation until origin has been created
+  this.animationQueue.set('defer', true);
+  originVis.customEvents.on('gitEngineReady', function() {
+    this.origin = originVis.gitEngine;
+    originVis.gitEngine.assignLocalRepo(this);
+    // and then here is the crazy part -- we need the ORIGIN to refresh
+    // itself in a separate animation. @_____@
+    this.origin.externalRefresh();
+    this.animationQueue.start();
+  }, this);
+
+  // TODO handle the case where the master target on origin is not present
+  // locally, so we have to go up the chain. for now we assume the master on
+  // origin is at least present
+  var originTree = JSON.parse(unescape(treeString));
+  var originMasterTarget = originTree.branches.master.target;
+  var originMaster = this.makeBranch(
+    'o/master',
+    this.getCommitFromRef(originMasterTarget)
+  );
+  originMaster.set('remote', true);
+
+  // add a simple refresh animation
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
 };
 
 GitEngine.prototype.getOrMakeRecursive = function(tree, createdSoFar, objID) {
@@ -22581,12 +23145,32 @@ GitEngine.prototype.tearDown = function() {
   this.removeAll();
 };
 
+GitEngine.prototype.reloadGraphics = function() {
+  // get the root commit
+  this.gitVisuals.rootCommit = this.refs['C0'];
+  // this just basically makes the HEAD branch. the head branch really should have been
+  // a member of a collection and not this annoying edge case stuff... one day
+  this.gitVisuals.initHeadBranch();
+
+  // when the paper is ready
+  this.gitVisuals.drawTreeFromReload();
+
+  this.gitVisuals.refreshTreeHarsh();
+};
+
 GitEngine.prototype.removeAll = function() {
   this.branchCollection.reset();
   this.commitCollection.reset();
   this.refs = {};
   this.HEAD = null;
   this.rootCommit = null;
+
+  if (this.origin) {
+    // we will restart all this jazz during init from tree
+    this.origin.gitVisuals.getVisualization().tearDown();
+    delete this.origin;
+    this.gitVisuals.getVisualization().clearOrigin();
+  }
 
   this.gitVisuals.resetAll();
 };
@@ -22628,7 +23212,7 @@ GitEngine.prototype.validateBranchName = function(name) {
   return name;
 };
 
-GitEngine.prototype.makeBranch = function(id, target) {
+GitEngine.prototype.validateAndMakeBranch = function(id, target) {
   id = this.validateBranchName(id);
   if (this.refs[id]) {
     throw new GitError({
@@ -22639,6 +23223,10 @@ GitEngine.prototype.makeBranch = function(id, target) {
     });
   }
 
+  this.makeBranch(id, target);
+};
+
+GitEngine.prototype.makeBranch = function(id, target) {
   var branch = new Branch({
     target: target,
     id: id
@@ -22687,15 +23275,33 @@ GitEngine.prototype.printBranches = function(branches) {
   });
 };
 
+GitEngine.prototype.getUniqueID = function() {
+  var id = this.uniqueId('C');
+
+  var hasID = _.bind(function(idToCheck) {
+    // loop through and see if we have it locally or
+    // remotely
+    if (this.refs[idToCheck]) {
+      return true;
+    }
+    if (this.origin && this.origin.refs[idToCheck]) {
+      return true;
+    }
+    return false;
+  }, this);
+
+  while (hasID(id)) {
+    id = this.uniqueId('C');
+  }
+  return id;
+};
+
 GitEngine.prototype.makeCommit = function(parents, id, options) {
   // ok we need to actually manually create commit IDs now because
   // people like nikita (thanks for finding this!) could
   // make branches named C2 before creating the commit C2
   if (!id) {
-    id = this.uniqueId('C');
-    while (this.refs[id]) {
-      id = this.uniqueId('C');
-    }
+    id = this.getUniqueID();
   }
 
   var commit = new Commit(_.extend({
@@ -22907,6 +23513,95 @@ GitEngine.prototype.cherrypickStarter = function() {
   this.animationFactory.rebaseAnimation(this.animationQueue, animationResponse, this, this.gitVisuals);
 };
 
+/*************************************
+ * Origin stuff!
+ ************************************/
+
+GitEngine.prototype.fetchStarter = function() {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  this.fetch();
+};
+
+GitEngine.prototype.fetch = function() {
+  // TODO refactor to use rebase animation stuff!!
+  // ok so we essentially are always in "-force" mode, since we always assume
+  // the origin commits are downstream of where we are. Here is the outline:
+  //
+  // first we get the commits we need by exporting the origin tree and
+  // walking upwards until we hit the upstream set defined by origin/master.
+  //
+  // then we simply set the target of o/master to the target of master on
+  // the origin branch
+  var oldCommits = this.exportTree().commits;
+  // HAX HAX omg we will abuse our tree instantiation here :D
+  var originTree = this.origin.exportTree();
+  _.each(originTree.commits, function(commit, id) {
+    // if we have it, no worries
+    if (this.refs[id]) {
+      return;
+    }
+    // go make it!
+    var downloadedCommit = this.getOrMakeRecursive(originTree, this.refs, id);
+    this.commitCollection.add(downloadedCommit);
+  }, this);
+
+  // since we now might have many commits more than before, lets
+  // check all the ones that didn't use to exist and make animations
+  var newCommits = this.exportTree().commits;
+  var commitsToAnimate = [];
+  _.each(newCommits, function(commit, id) {
+    if (oldCommits[id]) {
+      return;
+    }
+    commitsToAnimate.push(this.refs[id]);
+  }, this);
+
+  // now sort by id...
+  commitsToAnimate.sort(_.bind(this.idSortFunc, this));
+
+  _.each(commitsToAnimate, function(newCommit) {
+    this.animationFactory.genCommitBirthAnimation(
+      this.animationQueue,
+      newCommit,
+      this.gitVisuals
+    );
+  }, this);
+
+  var originLocation = this.origin.exportTree().branches.master.target;
+  // yay! now we just set o/master and do a simple refresh
+  this.setTargetLocation(this.refs['o/master'], this.refs[originLocation]);
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+};
+
+GitEngine.prototype.originInitStarter = function() {
+  this.acceptNoGeneralArgs();
+  this.makeOrigin(this.printTree(this.exportTreeForBranch('master')));
+};
+
+GitEngine.prototype.fakeTeamworkStarter = function() {
+  this.acceptNoGeneralArgs();
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+
+  var id = this.getUniqueID();
+  this.origin.receiveTeamwork(id, this.animationQueue);
+};
+
+GitEngine.prototype.receiveTeamwork = function(id, animationQueue) {
+  var newCommit = this.makeCommit([this.getCommitFromRef('HEAD')], id);
+  this.setTargetLocation(this.HEAD, newCommit);
+
+  this.animationFactory.genCommitBirthAnimation(animationQueue, newCommit, this.gitVisuals);
+};
+
 GitEngine.prototype.cherrypick = function(ref) {
   var commit = this.getCommitFromRef(ref);
 
@@ -23038,6 +23733,7 @@ GitEngine.prototype.resolveRelativeRef = function(commit, relative) {
 };
 
 GitEngine.prototype.resolveStringRef = function(ref) {
+  ref = this.crappyUnescape(ref);
   if (this.refs[ref]) {
     return this.refs[ref];
   }
@@ -23616,7 +24312,7 @@ GitEngine.prototype.checkoutStarter = function() {
 
   this.validateArgBounds(this.generalArgs, 1, 1);
 
-  this.checkout(this.unescapeQuotes(this.generalArgs[0]));
+  this.checkout(this.crappyUnescape(this.generalArgs[0]));
 };
 
 GitEngine.prototype.checkout = function(idOrTarget) {
@@ -23628,6 +24324,11 @@ GitEngine.prototype.checkout = function(idOrTarget) {
   }
 
   var type = target.get('type');
+  // check if this is an origin branch, and if so go to the commit referenced
+  if (type === 'branch' && target.getIsRemote()) {
+    target = this.getCommitFromRef(target.get('id'));
+  }
+
   if (type !== 'branch' && type !== 'commit') {
     throw new GitError({
       msg: intl.str('git-error-options')
@@ -23696,7 +24397,7 @@ GitEngine.prototype.forceBranch = function(branchName, where) {
 
 GitEngine.prototype.branch = function(name, ref) {
   var target = this.getCommitFromRef(ref);
-  this.makeBranch(name, target);
+  this.validateAndMakeBranch(name, target);
 };
 
 GitEngine.prototype.deleteBranch = function(name) {
@@ -23724,8 +24425,8 @@ GitEngine.prototype.deleteBranch = function(name) {
   }
 };
 
-GitEngine.prototype.unescapeQuotes = function(str) {
-  return str.replace(/&#x27;/g, "'");
+GitEngine.prototype.crappyUnescape = function(str) {
+  return str.replace(/&#x27;/g, "'").replace(/&#x2F;/g, '/');
 };
 
 GitEngine.prototype.filterError = function(err) {
@@ -23733,6 +24434,16 @@ GitEngine.prototype.filterError = function(err) {
       err instanceof CommandResult)) {
     throw err;
   }
+};
+
+// called on a origin repo from a local -- simply refresh immediately with
+// an animation
+GitEngine.prototype.externalRefresh = function() {
+  this.animationQueue = new AnimationQueue({
+    callback: function() {}
+  });
+  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  this.animationQueue.start();
 };
 
 GitEngine.prototype.dispatch = function(command, deferred) {
@@ -23944,6 +24655,14 @@ var Ref = Backbone.Model.extend({
     }
   },
 
+  getIsRemote: function() {
+    return false;
+  },
+
+  getName: function() {
+    return this.get('id');
+  },
+
   targetChanged: function(model, targetValue, ev) {
     // push our little 3 stack back. we need to do this because
     // backbone doesn't give you what the value WAS, only what it was changed
@@ -23959,7 +24678,12 @@ var Ref = Backbone.Model.extend({
 
 var Branch = Ref.extend({
   defaults: {
-    visBranch: null
+    visBranch: null,
+    remote: false
+  },
+
+  getIsRemote: function() {
+    return this.get('remote');
   },
 
   initialize: function() {
@@ -24607,6 +25331,14 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
     'en_US': 'Quick commit. Go Bears!',
     'zh_CN': '快速提交。上啊月熊！'
   },
+  'git-error-origin-required': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'An origin is required for that command'
+  },
+  'git-error-origin-exists': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'An origin already exists! You cannot make a new one'
+  },
   ///////////////////////////////////////////////////////////////////////////
   'git-error-branch': {
     '__desc__': 'One of the error messages for git',
@@ -25242,6 +25974,7 @@ var LevelBuilder = Level.extend({
       containerElement: this.startCanvasHolder.getCanvasLocation(),
       treeString: this.level.startTree,
       noKeyboardInput: true,
+      smallCanvas: true,
       noClick: true
     });
     return this.startCanvasHolder;
@@ -25579,6 +26312,7 @@ var Q = require('q');
 var util = require('../util');
 var Main = require('../app');
 var intl = require('../intl');
+var log = require('../log');
 
 var Errors = require('../util/errors');
 var Sandbox = require('../level/sandbox').Sandbox;
@@ -25692,6 +26426,10 @@ var Level = Sandbox.extend({
     });
   },
 
+  getEnglishName: function() {
+    return this.level.name.en_US;
+  },
+
   initName: function() {
     var name = intl.getName(this.level);
 
@@ -25745,6 +26483,7 @@ var Level = Sandbox.extend({
       containerElement: this.goalCanvasHolder.getCanvasLocation(),
       treeString: this.level.goalTreeString,
       noKeyboardInput: true,
+      smallCanvas: true,
       noClick: true
     });
     return this.goalCanvasHolder;
@@ -25758,6 +26497,7 @@ var Level = Sandbox.extend({
         'commandSubmitted',
         toIssue
       );
+      log.showLevelSolution(this.getEnglishName());
     }, this);
 
     var commandStr = command.get('rawStr');
@@ -25957,6 +26697,7 @@ var Level = Sandbox.extend({
     this.solved = true;
     if (!this.isShowingSolution) {
       Main.getEvents().trigger('levelSolved', this.level.id);
+      log.levelSolved(this.getEnglishName());
     }
 
     this.hideGoal();
@@ -25986,6 +26727,7 @@ var Level = Sandbox.extend({
     finishAnimationChain
     .then(function() {
       if (!skipFinishDialog && nextLevel) {
+        log.choseNextLevel(nextLevel.id);
         Main.getEventBaton().trigger(
           'commandSubmitted',
           'level ' + nextLevel.id
@@ -26812,6 +27554,41 @@ exports.getOptimisticLevelBuilderParse = function() {
 });
 require("/src/js/level/sandboxCommands.js");
 
+require.define("/src/js/log/index.js",function(require,module,exports,__dirname,__filename,process,global){
+var log = function(category, action, label) {
+  window._gaq = window._gaq || [];
+  window._gaq.push(['_trackEvent', category, action, label]);
+  //console.log('just logged ', [category, action, label].join('|'));
+};
+
+exports.viewInteracted = function(viewName) {
+  log('views', 'interacted', viewName);
+};
+
+exports.showLevelSolution = function(levelName) {
+  log('levels', 'showedLevelSolution', levelName);
+};
+
+exports.choseNextLevel = function(levelID) {
+  log('levels', 'nextLevelChosen', levelID);
+};
+
+exports.levelSelected = function(levelName) {
+  log('levels', 'levelSelected', levelName);
+};
+
+exports.levelSolved = function(levelName) {
+  log('levels', 'levelSolved', levelName);
+};
+
+exports.commandEntered = function(value) {
+  log('commands', 'commandEntered', value);
+};
+
+
+});
+require("/src/js/log/index.js");
+
 require.define("/src/js/models/collections.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 var Q = require('q');
 // horrible hack to get localStorage Backbone plugin
@@ -27147,11 +27924,12 @@ var GRAPHICS = {
   defaultEasing: 'easeInOut',
   defaultAnimationTime: 400,
 
-  //rectFill: '#FF3A3A',
   rectFill: 'hsb(0.8816909813322127,0.7,1)',
   headRectFill: '#2831FF',
   rectStroke: '#FFF',
   rectStrokeWidth: '3',
+
+  originDash: '- ',
 
   multiBranchY: 20,
   upstreamHeadOpacity: 0.5,
@@ -28045,6 +28823,7 @@ var Errors = require('../util/errors');
 var Warning = Errors.Warning;
 
 var util = require('../util');
+var log = require('../log');
 var keyboard = require('../util/keyboard');
 
 var CommandPromptView = Backbone.View.extend({
@@ -28266,6 +29045,7 @@ var CommandPromptView = Backbone.View.extend({
     if (this.commands.length > 100) {
       this.clearLocalStorage();
     }
+    log.commandEntered(value);
   },
 
   submitCommand: function(value) {
@@ -28679,6 +29459,7 @@ var Backbone = (!require('../util').isBrowser()) ? require('backbone') : window.
 
 var Main = require('../app');
 var intl = require('../intl');
+var log = require('../log');
 var Constants = require('../util/constants');
 var KeyboardListener = require('../util/keyboard').KeyboardListener;
 var GitError = require('../util/errors').GitError;
@@ -29335,6 +30116,11 @@ var IntlHelperBar = HelperBar.extend({
     }];
   },
 
+  fireCommand: function() {
+    log.viewInteracted('intlSelect');
+    HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
   onJapaneseClick: function() {
     this.fireCommand('locale ja; levels');
     this.hide();
@@ -29381,6 +30167,11 @@ var CommandsHelperBar = HelperBar.extend({
     }];
   },
 
+  fireCommand: function() {
+    log.viewInteracted('helperBar');
+    HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
   onLevelsClick: function() {
     this.fireCommand('levels');
   },
@@ -29411,10 +30202,12 @@ var MainHelperBar = HelperBar.extend({
 
   onIntlClick: function() {
     this.showDeferMe(this.intlHelper);
+    log.viewInteracted('openIntlBar');
   },
 
   onCommandsClick: function() {
     this.showDeferMe(this.commandsHelper);
+    log.viewInteracted('openCommandsBar');
   },
 
   setupChildren: function() {
@@ -29508,6 +30301,7 @@ var Backbone = (!require('../util').isBrowser()) ? require('backbone') : window.
 
 var util = require('../util');
 var intl = require('../intl');
+var log = require('../log');
 var KeyboardListener = require('../util/keyboard').KeyboardListener;
 var Main = require('../app');
 
@@ -29733,6 +30527,9 @@ var LevelDropdownView = ContainedBase.extend({
         'commandSubmitted',
         'level ' + id
       );
+      var level = Main.getLevelArbiter().getLevel(id);
+      var name = level.name.en_US;
+      log.levelSelected(name);
     }
     this.hide();
   },
@@ -30576,6 +31373,7 @@ var VisEdgeCollection = require('../visuals/visEdge').VisEdgeCollection;
 function GitVisuals(options) {
   options = options || {};
   this.options = options;
+  this.visualization = options.visualization;
   this.commitCollection = options.commitCollection;
   this.branchCollection = options.branchCollection;
   this.visNodeMap = {};
@@ -30596,11 +31394,6 @@ function GitVisuals(options) {
   this.branchCollection.on('remove', this.removeBranch, this);
   this.deferred = [];
 
-  // eventually have origin support here
-  this.posBoundaries = {
-    min: 0,
-    max: 1
-  };
   this.flipFraction = 0.65;
 
   var Main = require('../app');
@@ -30654,6 +31447,10 @@ GitVisuals.prototype.assignGitEngine = function(gitEngine) {
   this.deferFlush();
 };
 
+GitVisuals.prototype.getVisualization = function() {
+  return this.visualization;
+};
+
 GitVisuals.prototype.initHeadBranch = function() {
   // it's unfortaunte we have to do this, but the head branch
   // is an edge case because it's not part of a collection so
@@ -30674,9 +31471,28 @@ GitVisuals.prototype.getScreenPadding = function() {
   };
 };
 
+GitVisuals.prototype.getPosBoundaries = function() {
+  if (this.gitEngine.hasOrigin()) {
+    return {
+      min: 0,
+      max: 0.5
+    };
+  } else if (this.gitEngine.isOrigin()) {
+    return {
+      min: 0.5,
+      max: 1
+    };
+  }
+  return {
+    min: 0,
+    max: 1
+  };
+};
+
 GitVisuals.prototype.getFlipPos = function() {
-  var min = this.posBoundaries.min;
-  var max = this.posBoundaries.max;
+  var bounds = this.getPosBoundaries();
+  var min = bounds.min;
+  var max = bounds.max;
   return this.flipFraction * (max - min) + min;
 };
 
@@ -31030,10 +31846,11 @@ GitVisuals.prototype.calcBranchStacks = function() {
 GitVisuals.prototype.calcWidth = function() {
   this.maxWidthRecursive(this.rootCommit);
 
+  var bounds = this.getPosBoundaries();
   this.assignBoundsRecursive(
     this.rootCommit,
-    this.posBoundaries.min,
-    this.posBoundaries.max
+    bounds.min,
+    bounds.max
   );
 };
 
@@ -31053,10 +31870,9 @@ GitVisuals.prototype.maxWidthRecursive = function(commit) {
   return maxWidth;
 };
 
-GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFrac) {
-  centerFrac = (centerFrac === undefined) ? 0.5 : centerFrac;
+GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max) {
   // I always position myself within my bounds
-  var myWidthPos = min + (max - min) * centerFrac;
+  var myWidthPos = (max + min) / 2.0;
   commit.get('visNode').get('pos').x = myWidthPos;
 
   if (commit.get('children').length === 0) {
@@ -31075,28 +31891,6 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
     }
   }, this);
 
-  // TODO: refactor into another method
-  var getCenterFrac = function(index, centerFrac) {
-    if (myLength < 0.99) {
-      if (children.length < 2) {
-        return centerFrac;
-      } else {
-        return 0.5;
-      }
-    }
-    if (children.length < 2) {
-      return 0.5;
-    }
-    // we introduce a VERY specific rule here, to push out
-    // the first "divergence" of the graph
-    if (index === 0) {
-      return 1/3;
-    } else if (index === children.length - 1) {
-      return 2/3;
-    }
-    return centerFrac;
-  };
-
   var prevBound = min;
   _.each(children, function(child, index) {
     if (!child.isMainParent(commit)) {
@@ -31105,12 +31899,11 @@ GitVisuals.prototype.assignBoundsRecursive = function(commit, min, max, centerFr
 
     var flex = child.get('visNode').getMaxWidthScaled();
     var portion = (flex / totalFlex) * myLength;
-    var thisCenterFrac = getCenterFrac(index, centerFrac);
 
     var childMin = prevBound;
     var childMax = childMin + portion;
 
-    this.assignBoundsRecursive(child, childMin, childMax, thisCenterFrac);
+    this.assignBoundsRecursive(child, childMin, childMax);
     prevBound = childMin + portion;
   }, this);
 };
@@ -31124,7 +31917,7 @@ GitVisuals.prototype.calcDepth = function() {
 
   var depthIncrement = this.getDepthIncrement(maxDepth);
   _.each(this.visNodeMap, function(visNode) {
-    visNode.setDepthBasedOn(depthIncrement);
+    visNode.setDepthBasedOn(depthIncrement, this.getHeaderOffset());
   }, this);
 };
 
@@ -31205,15 +31998,25 @@ GitVisuals.prototype.animateEdges = function(speed) {
 };
 
 GitVisuals.prototype.getMinLayers = function() {
-  return (this.options.smallCanvas) ? 4 : 7;
+  return (this.options.smallCanvas) ? 2 : 7;
 };
 
 GitVisuals.prototype.getDepthIncrement = function(maxDepth) {
   // assume there are at least a number of layers until later
   // to have better visuals
   maxDepth = Math.max(maxDepth, this.getMinLayers());
-  var increment = 1.0 / maxDepth;
+  // if we have a header, reserve space for that
+  var vSpace = 1.0 - this.getHeaderOffset();
+  var increment = vSpace / maxDepth;
   return increment;
+};
+
+GitVisuals.prototype.shouldHaveHeader = function() {
+  return this.gitEngine.isOrigin() || this.gitEngine.hasOrigin();
+};
+
+GitVisuals.prototype.getHeaderOffset = function() {
+  return (this.shouldHaveHeader()) ? 0.05 : 0;
 };
 
 GitVisuals.prototype.calcDepthRecursive = function(commit, depth) {
@@ -31452,6 +32255,51 @@ var VisBase = Backbone.Model.extend({
     }, this);
   },
 
+  getNonAnimateKeys: function() {
+    return [
+      'stroke-dasharray'
+    ];
+  },
+
+  getIsInOrigin: function() {
+    if (!this.get('gitEngine')) {
+      return false;
+    }
+    return this.get('gitEngine').isOrigin();
+  },
+
+  animateToAttr: function(attr, speed, easing) {
+    if (speed === 0) {
+      this.setAttr(attr, /* instant */ true);
+      return;
+    }
+
+    var s = speed !== undefined ? speed : this.get('animationSpeed');
+    var e = easing || this.get('animationEasing');
+    this.setAttr(attr, /* instance */ false, s, e);
+  },
+
+  setAttrBase: function(keys, attr, instant, speed, easing) {
+    _.each(keys, function(key) {
+      if (instant) {
+        this.get(key).attr(attr[key]);
+      } else {
+        this.get(key).stop();
+        this.get(key).animate(attr[key], speed, easing);
+        // some keys dont support animating too, so set those instantly here
+        _.forEach(this.getNonAnimateKeys(), function(nonAnimateKey) {
+          if (attr[key] && attr[key][nonAnimateKey] !== undefined) {
+            this.get(key).attr(nonAnimateKey, attr[key][nonAnimateKey]);
+          }
+        }, this);
+      }
+
+      if (attr.css) {
+        $(this.get(key).node).css(attr.css);
+      }
+    }, this);
+  },
+
   animateAttrKeys: function(keys, attrObj, speed, easing) {
     // either we animate a specific subset of keys or all
     // possible things we could animate
@@ -31576,23 +32424,18 @@ var VisBranch = VisBase.extend({
     var threshold = this.get('gitVisuals').getFlipPos();
     var overThreshold = (visNode.get('pos').x > threshold);
 
+    // easy logic first
     if (!this.get('isHead')) {
-      // easy logic first
-      return (overThreshold) ?
-        -1 :
-        1;
+      return (overThreshold) ? -1 : 1;
     }
+
     // now for HEAD....
     if (overThreshold) {
       // if by ourselves, then feel free to squeeze in. but
       // if other branches are here, then we need to show separate
-      return (this.isBranchStackEmpty()) ?
-        -1 :
-        1;
+      return (this.isBranchStackEmpty()) ? -1 : 1;
     } else {
-      return (this.isBranchStackEmpty()) ?
-        1 :
-        -1;
+      return (this.isBranchStackEmpty()) ? 1 : -1;
     }
   },
 
@@ -31781,12 +32624,17 @@ var VisBranch = VisBase.extend({
     };
   },
 
-  getName: function() {
-    var name = this.get('branch').get('id');
-    var selected = this.gitEngine.HEAD.get('target').get('id');
+  getIsRemote: function() {
+    return this.get('branch').getIsRemote();
+  },
 
-    var add = (selected == name) ? '*' : '';
-    return name + add;
+  getName: function() {
+    var name = this.get('branch').getName();
+    var selected = this.get('branch') === this.gitEngine.HEAD.get('target');
+    var isRemote = this.getIsRemote();
+
+    var after = (selected && !this.getIsInOrigin() && !isRemote) ? '*' : '';
+    return name + after;
   },
 
   nonTextToFront: function() {
@@ -31838,19 +32686,26 @@ var VisBranch = VisBase.extend({
       opacity: this.getTextOpacity()
     });
     this.set('text', text);
+    var attr = this.getAttributes();
 
     var rectPos = this.getRectPosition();
     var sizeOfRect = this.getRectSize();
     var rect = paper
       .rect(rectPos.x, rectPos.y, sizeOfRect.w, sizeOfRect.h, 8)
-      .attr(this.getAttributes().rect);
+      .attr(attr.rect);
     this.set('rect', rect);
 
     var arrowPath = this.getArrowPath();
     var arrow = paper
       .path(arrowPath)
-      .attr(this.getAttributes().arrow);
+      .attr(attr.arrow);
     this.set('arrow', arrow);
+
+    // set CSS
+    var keys = ['text', 'rect', 'arrow'];
+    _.each(keys, function(key) {
+      $(this.get(key).node).css(attr.css);
+    }, this);
 
     this.attachClickHandlers();
     rect.toFront();
@@ -31861,16 +32716,29 @@ var VisBranch = VisBase.extend({
     if (this.get('gitVisuals').options.noClick) {
       return;
     }
-    var commandStr = 'git checkout ' + this.get('branch').get('id');
-    var Main = require('../app');
-    var objs = [this.get('rect'), this.get('text'), this.get('arrow')];
+    var objs = [
+      this.get('rect'),
+      this.get('text'),
+      this.get('arrow')
+    ];
 
     _.each(objs, function(rObj) {
-      rObj.click(function() {
-        Main.getEventBaton().trigger('commandSubmitted', commandStr);
-      });
-      $(rObj.node).css('cursor', 'pointer');
-    });
+      rObj.click(_.bind(this.onClick ,this));
+    }, this);
+  },
+
+  shouldDisableClick: function() {
+    return this.get('isHead') && !this.gitEngine.getDetachedHead();
+  },
+
+  onClick: function() {
+    if (this.shouldDisableClick()) {
+      return;
+    }
+
+    var commandStr = 'git checkout ' + this.get('branch').get('id');
+    var Main = require('../app');
+    Main.getEventBaton().trigger('commandSubmitted', commandStr);
   },
 
   updateName: function() {
@@ -31903,8 +32771,16 @@ var VisBranch = VisBase.extend({
     var rectSize = this.getRectSize();
 
     var arrowPath = this.getArrowPath();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
+    var cursorStyle = (this.shouldDisableClick()) ?
+      'auto' :
+      'pointer';
 
     return {
+      css: {
+        cursor: cursorStyle
+      },
       text: {
         x: textPos.x,
         y: textPos.y,
@@ -31918,6 +32794,7 @@ var VisBranch = VisBase.extend({
         opacity: nonTextOpacity,
         fill: this.getFill(),
         stroke: this.get('stroke'),
+        //'stroke-dasharray': dashArray,
         'stroke-width': this.get('stroke-width')
       },
       arrow: {
@@ -31941,20 +32818,9 @@ var VisBranch = VisBase.extend({
     this.animateToAttr(toAttr, speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('text').attr(attr.text);
-      this.get('rect').attr(attr.rect);
-      this.get('arrow').attr(attr.arrow);
-      return;
-    }
-
-    var s = speed !== undefined ? speed : this.get('animationSpeed');
-    var e = easing || this.get('animationEasing');
-
-    this.get('text').stop().animate(attr.text, s, e);
-    this.get('rect').stop().animate(attr.rect, s, e);
-    this.get('arrow').stop().animate(attr.arrow, s, e);
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'rect', 'arrow'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
   }
 });
 
@@ -32139,7 +33005,8 @@ var VisEdge = VisBase.extend({
     }
 
     this.get('path').toBack();
-    this.get('path').stop().animate(
+    this.get('path').stop();
+    this.get('path').animate(
       attr.path,
       speed !== undefined ? speed : this.get('animationSpeed'),
       easing || this.get('animationEasing')
@@ -32219,13 +33086,12 @@ var VisNode = VisBase.extend({
     this.set('depth', Math.max(this.get('depth') || 0, depth));
   },
 
-  setDepthBasedOn: function(depthIncrement) {
+  setDepthBasedOn: function(depthIncrement, offset) {
     if (this.get('depth') === undefined) {
-      debugger;
       throw new Error('no depth yet!');
     }
     var pos = this.get('pos');
-    pos.y = this.get('depth') * depthIncrement;
+    pos.y = this.get('depth') * depthIncrement + offset;
   },
 
   getMaxWidthScaled: function() {
@@ -32268,6 +33134,8 @@ var VisNode = VisBase.extend({
     var pos = this.getScreenCoords();
     var textPos = this.getTextScreenCoords();
     var opacity = this.getOpacity();
+    var dashArray = (this.getIsInOrigin()) ?
+      GRAPHICS.originDash : '';
 
     return {
       circle: {
@@ -32277,6 +33145,7 @@ var VisNode = VisBase.extend({
         r: this.getRadius(),
         fill: this.getFill(),
         'stroke-width': this.get('stroke-width'),
+        'stroke-dasharray': dashArray,
         stroke: this.get('stroke')
       },
       text: {
@@ -32321,18 +33190,15 @@ var VisNode = VisBase.extend({
     this.animateToAttr(snapShot[this.getID()], speed, easing);
   },
 
-  animateToAttr: function(attr, speed, easing) {
-    if (speed === 0) {
-      this.get('circle').attr(attr.circle);
-      this.get('text').attr(attr.text);
-      return;
-    }
+  setAttr: function(attr, instant, speed, easing) {
+    var keys = ['text', 'circle'];
+    this.setAttrBase(keys, attr, instant, speed, easing);
+  },
 
+  animateToAttr: function(attr, speed, easing) {
+    VisBase.prototype.animateToAttr.apply(this, arguments);
     var s = speed !== undefined ? speed : this.get('animationSpeed');
     var e = easing || this.get('animationEasing');
-
-    this.get('circle').stop().animate(attr.circle, s, e);
-    this.get('text').stop().animate(attr.text, s, e);
 
     if (easing == 'bounce' &&
         attr.circle && attr.circle.cx !== undefined &&
@@ -32437,7 +33303,8 @@ var VisNode = VisBase.extend({
     _.each(this.get('outgoingEdges'), function(edge) {
       var headPos = edge.get('head').getScreenCoords();
       var path = edge.genSmoothBezierPathStringFromCoords(parentCoords, headPos);
-      edge.get('path').stop().attr({
+      edge.get('path').stop();
+      edge.get('path').attr({
         path: path,
         opacity: 0
       });
@@ -32650,7 +33517,8 @@ var Visualization = Backbone.View.extend({
       branchCollection: this.branchCollection,
       paper: this.paper,
       noClick: this.options.noClick,
-      smallCanvas: this.options.smallCanvas
+      smallCanvas: this.options.smallCanvas,
+      visualization: this
     });
 
     var GitEngine = require('../git').GitEngine;
@@ -32686,8 +33554,49 @@ var Visualization = Backbone.View.extend({
     this.customEvents.trigger('paperReady');
   },
 
+  clearOrigin: function() {
+    delete this.originVis;
+  },
+
+  makeOrigin: function(options) {
+    // oh god, here we go. We basically do a bizarre form of composition here,
+    // where this visualization actually contains another one of itself.
+    this.originVis = new Visualization(_.extend(
+      {},
+      // copy all of our options over, except...
+      this.options,
+      {
+        // never accept keyboard input or clicks
+        noKeyboardInput: true,
+        noClick: true,
+        treeString: options.treeString
+      }
+    ));
+    // return the newly created visualization which will soon have a git engine
+    return this.originVis;
+  },
+
+  originToo: function(methodToCall, args) {
+    if (!this.originVis) {
+      return;
+    }
+    var callMethod = _.bind(function() {
+      this.originVis[methodToCall].apply(this.originVis, args);
+    }, this);
+
+    if (this.originVis.paper) {
+      callMethod();
+      return;
+    }
+    // this is tricky -- sometimes we already have paper initialized but
+    // our origin vis does not (since we kill that on every reset).
+    // in this case lets bind to the custom event on paper ready
+    this.originVis.customEvents.on('paperReady', callMethod);
+  },
+
   setTreeIndex: function(level) {
     $(this.paper.canvas).css('z-index', level);
+    this.originToo('setTreeIndex', arguments);
   },
 
   setTreeOpacity: function(level) {
@@ -32696,6 +33605,7 @@ var Visualization = Backbone.View.extend({
     }
 
     $(this.paper.canvas).css('opacity', level);
+    this.originToo('setTreeOpacity', arguments);
   },
 
   getAnimationTime: function() { return 300; },
@@ -32703,11 +33613,14 @@ var Visualization = Backbone.View.extend({
   fadeTreeIn: function() {
     this.shown = true;
     $(this.paper.canvas).animate({opacity: 1}, this.getAnimationTime());
+
+    this.originToo('fadeTreeIn', arguments);
   },
 
   fadeTreeOut: function() {
     this.shown = false;
     $(this.paper.canvas).animate({opacity: 0}, this.getAnimationTime());
+    this.originToo('fadeTreeOut', arguments);
   },
 
   hide: function() {
@@ -32716,37 +33629,62 @@ var Visualization = Backbone.View.extend({
     setTimeout(_.bind(function() {
       $(this.paper.canvas).css('visibility', 'hidden');
     }, this), this.getAnimationTime());
+    this.originToo('hide', arguments);
   },
 
   show: function() {
     $(this.paper.canvas).css('visibility', 'visible');
     setTimeout(_.bind(this.fadeTreeIn, this), 10);
+    this.originToo('show', arguments);
   },
 
   showHarsh: function() {
     $(this.paper.canvas).css('visibility', 'visible');
     this.setTreeOpacity(1);
+    this.originToo('showHarsh', arguments);
   },
 
   resetFromThisTreeNow: function(treeString) {
     this.treeString = treeString;
+    // do the same but for origin tree string
+    var oTree = this.getOriginInTreeString(treeString);
+    if (oTree) {
+      var oTreeString = this.gitEngine.printTree(oTree);
+      this.originToo('resetFromThisThreeNow', [oTreeString]);
+    }
+  },
+
+  getOriginInTreeString: function(treeString) {
+    var tree = JSON.parse(unescape(treeString));
+    return tree.originTree;
   },
 
   reset: function(tree) {
     var treeString = tree || this.treeString;
     this.setTreeOpacity(0);
-    if (this.treeString) {
+    if (treeString) {
       this.gitEngine.loadTreeFromString(treeString);
     } else {
       this.gitEngine.defaultInit();
     }
     this.fadeTreeIn();
+
+    if (this.originVis) {
+      if (treeString) {
+        var oTree = this.getOriginInTreeString(treeString);
+        this.originToo('reset', [JSON.stringify(oTree)]);
+      } else {
+        // easy
+        this.originToo('reset', arguments);
+      }
+    }
   },
 
   tearDown: function() {
     this.gitEngine.tearDown();
     this.gitVisuals.tearDown();
     delete this.paper;
+    this.originToo('tearDown', arguments);
   },
 
   die: function() {
@@ -32756,6 +33694,7 @@ var Visualization = Backbone.View.extend({
         this.tearDown();
       }
     }, this), this.getAnimationTime());
+    this.originToo('die', arguments);
   },
 
   myResize: function() {
@@ -33020,7 +33959,7 @@ exports.sequenceInfo = {
       'en_US': 'Introduction Sequence',
       'ja': 'まずはここから',
       'fr_FR': 'Sequence d\'introduction',
-      'zh_CN': '序列简介',
+      'zh_CN': '基础篇',
       'ko': '기본 명령어'
     },
     about: {
@@ -33040,7 +33979,7 @@ exports.sequenceInfo = {
     about: {
       'en_US': 'The next serving of 100% git awesomes-ness. Hope you\'re hungry',
       'ja': '更にgitの素晴らしさを堪能しよう',
-      'zh_CN': '接下来是git的超赞特性。迫不及待了吧!'
+      'zh_CN': '接下来是git的超赞特性。迫不及待了吧！'
     }
   },
   rebase: {
@@ -33138,7 +34077,7 @@ require.define("/src/levels/intro/branching.js",function(require,module,exports,
             "beforeMarkdowns": [
               "Let's see what branches look like in practice.",
               "",
-              "Here we will check out a new branch named `newImage`"
+              "Here we will create a new branch named `newImage`"
             ],
             "afterMarkdowns": [
               "There, that's all there is to branching! The branch `newImage` now refers to commit `C1`"
@@ -33827,7 +34766,7 @@ require.define("/src/levels/intro/merging.js",function(require,module,exports,__
             "afterMarkdowns": [
               "Since `bugFix` was downstream of `master`, git didn't have to do any work; it simply just moved `bugFix` to the same commit `master` was attached to.",
               "",
-              "Now all the commits are the same color, which means each branch contains all the work in the repository! Woohoo"
+              "Now all the commits are the same color, which means each branch contains all the work in the repository! Woohoo!"
             ],
             "command": "git checkout bugFix; git merge master",
             "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit; git merge bugFix"
@@ -33965,7 +34904,7 @@ require.define("/src/levels/intro/merging.js",function(require,module,exports,__
             "afterMarkdowns": [
               "Puisque `bugFix` était un descendant de `master`, git n'avait aucun travail à effectuer; il a simplement déplacé `bugFix` au même commit auquel `master` est attaché.",
               "",
-              "Maintenant tous les commits sont de la même couleur, ce qui indique que chaque branche contient tout le contenu du dépôt ! Woohoo"
+              "Maintenant tous les commits sont de la même couleur, ce qui indique que chaque branche contient tout le contenu du dépôt ! Woohoo!"
             ],
             "command": "git checkout bugFix; git merge master",
             "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit; git merge bugFix"
@@ -34196,7 +35135,7 @@ require.define("/src/levels/intro/rebasing.js",function(require,module,exports,_
           "type": "GitDemonstrationView",
           "options": {
             "beforeMarkdowns": [
-              "Now we are checked out on the `master` branch. Let's do ahead and rebase onto `bugFix`..."
+              "Now we are checked out on the `master` branch. Let's go ahead and rebase onto `bugFix`..."
             ],
             "afterMarkdowns": [
               "There! Since `master` was downstream of `bugFix`, git simply moved the `master` branch reference forward in history."
@@ -34513,7 +35452,7 @@ require.define("/src/levels/mixed/grabbingOneCommit.js",function(require,module,
     "ko": "딱 한개의 커밋만 가져오기",
     "en_US": "Grabbing Just 1 Commit",
     "ja": "Grabbing Just 1 Commit",
-    "zh_CN": "私藏一个提交"
+    "zh_CN": "只取一个提交"
   },
   "hint": {
     "en_US": "Remember, interactive rebase or cherry-pick is your friend here",
@@ -34612,11 +35551,11 @@ require.define("/src/levels/mixed/grabbingOneCommit.js",function(require,module,
             "markdowns": [
               "## 本地栈式提交 (Locally stacked commits)",
               "",
-              "设想一下一个经常发生的场景：我在追踪一个有点棘手的 bug，为了更好地排查，我添加了一些 debug 语句和打印语句。",
+              "设想一下一个经常发生的场景：我在追踪一个有点棘手的 bug，为了更好地排查，我添加了一些调试命令和打印语句。",
               "",
-              "所有的这些调试和打印语句到只在它们的分支里。最终我终于找到这个 bug，揪出来 fix 掉，然后撒花庆祝！",
+              "所有的这些调试和打印语句都只在它们自己的分支里。最终我终于找到这个 bug，揪出来 fix 掉，然后撒花庆祝！",
               "",
-              "但有个问题就是现在我要把 `bugFix` 分支的工作合并回 `master` 分支上，我可以简单地快进（fast-forward） `master` 分支，但这样的话 `master` 分支就会包含我这些调试语句了。"
+              "现在唯一的问题就是要把我在 `bugFix` 分支里的工作合并回 `master` 分支。我可以简单地把 `master` 分支快进（fast-forward），但这样的话 `master` 分支就会包含我这些调试语句了。"
             ]
           }
         },
@@ -34624,7 +35563,7 @@ require.define("/src/levels/mixed/grabbingOneCommit.js",function(require,module,
           "type": "ModalAlert",
           "options": {
             "markdowns": [
-              "现在就是 Git 大显神通的时候啦。我们有几种方法来解决这个问题，但最直接的方法是：",
+              "现在就是 Git 大显神通的时候啦。解决这个问题的方法不止一个，但最直接的两个方法是：",
               "",
               "* `git rebase -i`",
               "* `git cherry-pick`",
@@ -35537,7 +36476,7 @@ require.define("/src/levels/rampup/relativeRefs2.js",function(require,module,exp
               "",
               "你现在是相对引用的高手了，现在*用*他来实际做点事情。",
               "",
-              "我使用相对引用最多的就是移动分支。你可以使用`-f`选项把直接让分支指向另一个提交亡灵。举个例子:",
+              "我使用相对引用最多的就是移动分支。你可以使用`-f`选项把直接让分支指向另一个提交。举个例子:",
               "",
               "`git branch -f master HEAD~3`",
               "",
