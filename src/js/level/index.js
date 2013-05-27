@@ -5,6 +5,7 @@ var Q = require('q');
 var util = require('../util');
 var Main = require('../app');
 var intl = require('../intl');
+var log = require('../log');
 
 var Errors = require('../util/errors');
 var Sandbox = require('../level/sandbox').Sandbox;
@@ -118,6 +119,10 @@ var Level = Sandbox.extend({
     });
   },
 
+  getEnglishName: function() {
+    return this.level.name.en_US;
+  },
+
   initName: function() {
     var name = intl.getName(this.level);
 
@@ -171,6 +176,7 @@ var Level = Sandbox.extend({
       containerElement: this.goalCanvasHolder.getCanvasLocation(),
       treeString: this.level.goalTreeString,
       noKeyboardInput: true,
+      smallCanvas: true,
       noClick: true
     });
     return this.goalCanvasHolder;
@@ -184,6 +190,7 @@ var Level = Sandbox.extend({
         'commandSubmitted',
         toIssue
       );
+      log.showLevelSolution(this.getEnglishName());
     }, this);
 
     var commandStr = command.get('rawStr');
@@ -383,6 +390,7 @@ var Level = Sandbox.extend({
     this.solved = true;
     if (!this.isShowingSolution) {
       Main.getEvents().trigger('levelSolved', this.level.id);
+      log.levelSolved(this.getEnglishName());
     }
 
     this.hideGoal();
@@ -412,6 +420,7 @@ var Level = Sandbox.extend({
     finishAnimationChain
     .then(function() {
       if (!skipFinishDialog && nextLevel) {
+        log.choseNextLevel(nextLevel.id);
         Main.getEventBaton().trigger(
           'commandSubmitted',
           'level ' + nextLevel.id
