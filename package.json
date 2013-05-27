@@ -21,7 +21,7 @@
     "grunt-shell": "~0.1.4"
   }
   "scripts": {
-  "test": "grunt travis --verbose"
+  "gh-pages": "grunt travis --verbose"
 }
 
 }
