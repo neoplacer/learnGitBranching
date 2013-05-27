@@ -19,7 +19,7 @@
     "q": "~0.8.11",
     "markdown": "~0.4.0",
     "grunt-shell": "~0.1.4"
-  }
+  },
   "scripts": {
   "gh-pages": "grunt travis --verbose"
 }
