@@ -52,6 +52,22 @@ exports.strings = {
     'en_US': 'Quick commit. Go Bears!',
     'zh_CN': '快速提交。上啊月熊！'
   },
+  'git-error-origin-fetch-uptodate': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Already up to date!'
+  },
+  'git-error-origin-fetch-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Your origin branch is out of sync with the remote branch and fetch cannot be performed. try using --force'
+  },
+  'git-error-origin-push-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'The remote repository has diverged from your local repository, so uploading your changes is not a simple fast forward (and thus your push was rejected). Please pull down the new changes in the remote repository, incorporate them into this branch, and try again. You can do so with git pull or git pull --rebase'
+  },
+  'git-error-remote-branch': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'You cannot execute that command on a remote branch'
+  },
   'git-error-origin-required': {
     '__desc__': 'One of the error messages for git',
     'en_US': 'An origin is required for that command'
@@ -377,7 +393,7 @@ exports.strings = {
   ///////////////////////////////////////////////////////////////////////////
   'help-vague-level': {
     '__desc__': 'When you are in a level and you say help, its vague and you need to specify',
-    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" or "help general"',
+    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" to learn more about this lesson, "help general" for using Learn GitBranching, or "objective" to learn about how to solve the level.',
     'zh_CN': '您正在关卡中，这里有多种形式的帮助，请选择 "help level" (关卡帮助)或 "help general" (一般帮助)'
   },
   ///////////////////////////////////////////////////////////////////////////
