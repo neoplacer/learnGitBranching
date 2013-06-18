@@ -5401,6 +5401,22 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
     'en_US': 'Quick commit. Go Bears!',
     'zh_CN': '快速提交。上啊月熊！'
   },
+  'git-error-origin-fetch-uptodate': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Already up to date!'
+  },
+  'git-error-origin-fetch-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Your origin branch is out of sync with the remote branch and fetch cannot be performed. try using --force'
+  },
+  'git-error-origin-push-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'The remote repository has diverged from your local repository, so uploading your changes is not a simple fast forward (and thus your push was rejected). Please pull down the new changes in the remote repository, incorporate them into this branch, and try again. You can do so with git pull or git pull --rebase'
+  },
+  'git-error-remote-branch': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'You cannot execute that command on a remote branch'
+  },
   'git-error-origin-required': {
     '__desc__': 'One of the error messages for git',
     'en_US': 'An origin is required for that command'
@@ -5726,7 +5742,7 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
   ///////////////////////////////////////////////////////////////////////////
   'help-vague-level': {
     '__desc__': 'When you are in a level and you say help, its vague and you need to specify',
-    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" or "help general"',
+    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" to learn more about this lesson, "help general" for using Learn GitBranching, or "objective" to learn about how to solve the level.',
     'zh_CN': '您正在关卡中，这里有多种形式的帮助，请选择 "help level" (关卡帮助)或 "help general" (一般帮助)'
   },
   ///////////////////////////////////////////////////////////////////////////
@@ -6054,8 +6070,6 @@ var Level = Sandbox.extend({
     this.commandsThatCount = this.getCommandsThatCount();
     this.solved = false;
 
-    this.treeCompare = new TreeCompare();
-
     this.initGoalData(options);
     this.initName(options);
 
@@ -6097,9 +6111,11 @@ var Level = Sandbox.extend({
       return;
     }
 
-    var dialog = _.clone(intl.getStartDialog(levelObj));
+    debugger;
+    console.log(intl.getStartDialog(levelObj));
+    var dialog = $.extend({}, intl.getStartDialog(levelObj));
     // grab the last slide only
-    dialog.childViews = dialog.childViews.splice(-1);
+    dialog.childViews = dialog.childViews.slice(-1);
     new MultiView(_.extend(
       dialog,
       { deferred: deferred }
@@ -6347,28 +6363,8 @@ var Level = Sandbox.extend({
       return;
     }
 
-    // TODO refactor this ugly ass switch statement...
-    // BIG TODO REALLY REFACTOR HAX HAX
-    // ok so lets see if they solved it...
     var current = this.mainVis.gitEngine.exportTree();
-    var solved;
-    if (this.level.compareOnlyMaster) {
-      solved = this.treeCompare.compareBranchWithinTrees(current, this.level.goalTreeString, 'master');
-    } else if (this.level.compareOnlyBranches) {
-      solved = this.treeCompare.compareAllBranchesWithinTrees(current, this.level.goalTreeString);
-    } else if (this.level.compareAllBranchesHashAgnostic) {
-      solved = this.treeCompare.compareAllBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString);
-    } else if (this.level.compareOnlyMasterHashAgnostic) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-    } else if (this.level.compareOnlyMasterHashAgnosticWithAsserts) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-      solved = solved && this.treeCompare.evalAsserts(
-        current,
-        this.level.goalAsserts
-      );
-    } else {
-      solved = this.treeCompare.compareAllBranchesWithinTreesAndHEAD(current, this.level.goalTreeString);
-    }
+    var solved = TreeCompare.dispatchFromLevel(this.level, current);
 
     if (!solved) {
       defer.resolve();
@@ -7054,7 +7050,7 @@ var Q = require('q');
 
 var intl = require('../intl');
 
-var AnimationFactoryModule = require('../visuals/animation/animationFactory');
+var AnimationFactory = require('../visuals/animation/animationFactory').AnimationFactory;
 var AnimationQueue = require('../visuals/animation').AnimationQueue;
 var TreeCompare = require('./treeCompare').TreeCompare;
 
@@ -7077,8 +7073,10 @@ function GitEngine(options) {
   this.eventBaton = options.eventBaton;
   this.eventBaton.stealBaton('processGitCommand', this.dispatch, this);
 
-  this.animationFactory = options.animationFactory ||
-    new AnimationFactoryModule.AnimationFactory();
+  // poor man's dependency injection
+  if (options.animationFactory) {
+    AnimationFactory = options.animationFactory;
+  }
 
   // global variable to keep track of the options given
   // along with the command call.
@@ -7093,7 +7091,7 @@ GitEngine.prototype.initUniqueID = function() {
   this.uniqueId = (function() {
     var n = 0;
     return function(prepend) {
-      return prepend? prepend + n++ : n++;
+      return prepend ? prepend + n++ : n++;
     };
   })();
 };
@@ -7212,7 +7210,7 @@ GitEngine.prototype.exportTree = function() {
 
 GitEngine.prototype.printTree = function(tree) {
   tree = tree || this.exportTree();
-  TreeCompare.prototype.reduceTreeFields([tree]);
+  TreeCompare.reduceTreeFields([tree]);
 
   var str = JSON.stringify(tree);
   if (/'/.test(str)) {
@@ -7302,19 +7300,19 @@ GitEngine.prototype.makeOrigin = function(treeString) {
   });
 
   // defer the starting of our animation until origin has been created
-  this.animationQueue.set('defer', true);
+  this.animationQueue.set('promiseBased', true);
   originVis.customEvents.on('gitEngineReady', function() {
     this.origin = originVis.gitEngine;
     originVis.gitEngine.assignLocalRepo(this);
     // and then here is the crazy part -- we need the ORIGIN to refresh
     // itself in a separate animation. @_____@
     this.origin.externalRefresh();
-    this.animationQueue.start();
+    AnimationFactory.playRefreshAnimationAndFinish(this.gitVisuals, this.animationQueue);
   }, this);
 
   // TODO handle the case where the master target on origin is not present
   // locally, so we have to go up the chain. for now we assume the master on
-  // origin is at least present
+  // origin is at least present.
   var originTree = JSON.parse(unescape(treeString));
   var originMasterTarget = originTree.branches.master.target;
   var originMaster = this.makeBranch(
@@ -7322,9 +7320,6 @@ GitEngine.prototype.makeOrigin = function(treeString) {
     this.getCommitFromRef(originMasterTarget)
   );
   originMaster.set('remote', true);
-
-  // add a simple refresh animation
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
 };
 
 GitEngine.prototype.getOrMakeRecursive = function(tree, createdSoFar, objID) {
@@ -7502,10 +7497,25 @@ GitEngine.prototype.getBranches = function() {
       id: branch.get('id'),
       selected: this.HEAD.get('target') === branch,
       target: branch.get('target'),
+      remote: branch.getIsRemote(),
       obj: branch
     });
   }, this);
   return toReturn;
+};
+
+GitEngine.prototype.getRemoteBranches = function() {
+  var all = this.getBranches();
+  return _.filter(all, function(branchJSON) {
+    return branchJSON.remote === true;
+  });
+};
+
+GitEngine.prototype.getLocalBranches = function() {
+  var all = this.getBranches();
+  return _.filter(all, function(branchJSON) {
+    return branchJSON.remote === false;
+  });
 };
 
 GitEngine.prototype.printBranchesWithout = function(without) {
@@ -7631,64 +7641,58 @@ GitEngine.prototype.twoArgsImpliedHead = function(args, option) {
 GitEngine.prototype.revertStarter = function() {
   this.validateArgBounds(this.generalArgs, 1, NaN);
 
-  var response = this.revert(this.generalArgs);
-
-  if (response) {
-    this.animationFactory.rebaseAnimation(this.animationQueue, response, this, this.gitVisuals);
-  }
+  this.revert(this.generalArgs);
 };
 
 GitEngine.prototype.revert = function(whichCommits) {
-  // for each commit, we want to revert it
-  var toRebase = [];
-  _.each(whichCommits, function(stringRef) {
-    toRebase.push(this.getCommitFromRef(stringRef));
+  // resolve the commits we will rebase
+  var toRevert = _.map(whichCommits, function(stringRef) {
+    return this.getCommitFromRef(stringRef);
   }, this);
 
-  // we animate reverts now!! we use the rebase animation though so that's
-  // why the terminology is like it is
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID(toRebase[0]);
-  animationResponse.toRebaseArray = toRebase.slice(0);
-  animationResponse.rebaseSteps = [];
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+  var destBranch = this.resolveID('HEAD');
 
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toRevert,
+    destBranch
+  );
 
-  // now make a bunch of commits on top of where we are
   var base = this.getCommitFromRef('HEAD');
-  _.each(toRebase, function(oldCommit) {
+  // each step makes a new commit
+  var chainStep = _.bind(function(oldCommit) {
     var newId = this.rebaseAltID(oldCommit.get('id'));
-
-    var commitMessage = intl.str(
-      'git-revert-msg',
-      {
-        oldCommit: this.resolveName(oldCommit),
-        oldMsg: oldCommit.get('commitMessage')
-      }
-    );
-
+    var commitMessage = intl.str('git-revert-msg', {
+      oldCommit: this.resolveName(oldCommit),
+      oldMsg: oldCommit.get('commitMessage')
+    });
     var newCommit = this.makeCommit([base], newId, {
       commitMessage: commitMessage
     });
-
     base = newCommit;
 
-    // animation stuff
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: oldCommit,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: afterSnapshot
-    });
-    beforeSnapshot = afterSnapshot;
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
-  // done! update our location
-  this.setTargetLocation('HEAD', base);
 
-  // animation
-  return animationResponse;
+  // set up the promise chain
+  _.each(toRevert, function(commit) {
+    chain = chain.then(function() {
+      return chainStep(commit);
+    });
+  }, this);
+
+  // done! update our location
+  chain = chain.then(_.bind(function() {
+    this.setTargetLocation('HEAD', base);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 GitEngine.prototype.resetStarter = function() {
@@ -7725,7 +7729,7 @@ GitEngine.prototype.cherrypickStarter = function() {
 
   var set = this.getUpstreamSet('HEAD');
   // first resolve all the refs (as an error check)
-  _.each(this.generalArgs, function(arg) {
+  var toCherrypick = _.map(this.generalArgs, function(arg) {
     var commit = this.getCommitFromRef(arg);
     // and check that its not upstream
     if (set[commit.get('id')]) {
@@ -7736,41 +7740,201 @@ GitEngine.prototype.cherrypickStarter = function() {
         )
       });
     }
+    return commit;
   }, this);
+
   // error checks are all good, lets go!
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+  var destinationBranch = this.resolveID('HEAD');
 
-  // hack up the rebase response to animate this better
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID('HEAD');
-  animationResponse.toRebaseArray = [];
-  animationResponse.rebaseSteps = [];
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toCherrypick,
+    destinationBranch
+  );
 
-  // now lets start going through
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
-  var newCommit;
-  _.each(this.generalArgs, function(arg) {
-    var oldCommit = this.getCommitFromRef(arg);
-    animationResponse.toRebaseArray.push(oldCommit);
-
-    newCommit = this.cherrypick(arg);
-
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: oldCommit,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: this.gitVisuals.genSnapshot()
-    });
-    beforeSnapshot = afterSnapshot;
+  var chainStep = _.bind(function(commit) {
+    var newCommit = this.cherrypick(commit);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
 
-  this.animationFactory.rebaseAnimation(this.animationQueue, animationResponse, this, this.gitVisuals);
+  _.each(toCherrypick, function(arg) {
+    chain = chain.then(function() {
+      return chainStep(arg);
+    });
+  }, this);
+
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 /*************************************
  * Origin stuff!
  ************************************/
+
+GitEngine.prototype.checkUpstreamOfSource = function(
+  target,
+  source,
+  targetBranch,
+  sourceBranch,
+  errorMsg
+) {
+  // here we are downloading some X number of commits from source onto
+  // target. Hence target should be strictly upstream of source
+
+  // lets first get the upstream set from source's dest branch
+  var upstream = source.getUpstreamSet(sourceBranch);
+
+  var targetLocationID = target.getCommitFromRef(targetBranch).get('id');
+  if (!upstream[targetLocationID]) {
+    throw new GitError({
+      msg: errorMsg || intl.str('git-error-origin-fetch-no-ff')
+    });
+  }
+};
+
+GitEngine.prototype.getTargetGraphDifference = function(
+  target,
+  source,
+  targetBranch,
+  sourceBranch
+) {
+  sourceBranch = source.resolveID(sourceBranch);
+
+  var targetSet = target.getUpstreamSet(targetBranch);
+  var sourceStartCommit = source.getCommitFromRef(sourceBranch);
+
+  var sourceTree = source.exportTree();
+  var sourceStartCommitJSON = sourceTree.commits[sourceStartCommit.get('id')];
+
+  if (target.refs[sourceStartCommitJSON.id]) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-fetch-uptodate')
+    });
+  }
+
+  // ok great, we have our starting point and our stopping set. lets go ahead
+  // and traverse upwards and keep track of depth manually
+  sourceStartCommitJSON.depth = 0;
+  var difference = [];
+  var toExplore = [sourceStartCommitJSON];
+
+  var pushParent = function(parentID) {
+    if (targetSet[parentID]) {
+      // we already have this commit, lets bounce
+      return;
+    }
+
+    var parentJSON = sourceTree.commits[parentID];
+    parentJSON.depth = here.depth + 1;
+    toExplore.push(parentJSON);
+  };
+
+  while (toExplore.length) {
+    var here = toExplore.pop();
+    difference.push(here);
+    _.each(here.parents, pushParent);
+  }
+
+  return difference.sort(function(cA, cB) {
+    // reverse sort by depth
+    return cB.depth - cA.depth;
+  });
+};
+
+GitEngine.prototype.pushStarter = function(options) {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  this.push();
+};
+
+GitEngine.prototype.push = function(options) {
+  options = options || {};
+  var localBranch = this.refs['master'];
+  var remoteBranch = this.origin.refs['master'];
+
+  // first check if this is even allowed by checking the sync between
+  this.checkUpstreamOfSource(
+    this,
+    this.origin,
+    remoteBranch,
+    localBranch,
+    intl.str('git-error-origin-push-no-ff')
+  );
+
+  var commitsToMake = this.getTargetGraphDifference(
+    this.origin,
+    this,
+    remoteBranch,
+    localBranch
+  );
+
+  var makeCommit = _.bind(function(id, parentIDs) {
+    // need to get the parents first. since we order by depth, we know
+    // the dependencies are there already
+    var parents = _.map(parentIDs, function(parentID) {
+      return this.origin.refs[parentID];
+    }, this);
+    return this.origin.makeCommit(parents, id);
+  }, this);
+
+  // now make the promise chain to make each commit
+  var chainStep = _.bind(function(id, parents) {
+    var newCommit = makeCommit(id, parents);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.origin.gitVisuals
+    );
+  }, this);
+
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(commitsToMake, function(commitJSON) {
+    chain = chain.then(_.bind(function() {
+      return AnimationFactory.playHighlightPromiseAnimation(
+        this.refs[commitJSON.id],
+        remoteBranch
+      );
+    }, this));
+
+    chain = chain.then(function() {
+      return chainStep(
+        commitJSON.id,
+        commitJSON.parents
+      );
+    });
+  }, this);
+
+  chain = chain.then(_.bind(function() {
+    var localLocationID = localBranch.get('target').get('id');
+    var remoteCommit = this.origin.refs[localLocationID];
+    this.origin.setTargetLocation(remoteBranch, remoteCommit);
+    // unhighlight local
+    AnimationFactory.playRefreshAnimation(this.gitVisuals);
+    return AnimationFactory.playRefreshAnimation(this.origin.gitVisuals);
+  }, this));
+
+  // HAX HAX update o/master
+  chain = chain.then(_.bind(function() {
+    var localLocationID = localBranch.get('target').get('id');
+    var localCommit = this.refs[localLocationID];
+    // HAX HAX
+    this.setTargetLocation(this.refs['o/master'], localCommit);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
+  }
+};
 
 GitEngine.prototype.fetchStarter = function() {
   if (!this.hasOrigin()) {
@@ -7782,84 +7946,243 @@ GitEngine.prototype.fetchStarter = function() {
   this.fetch();
 };
 
-GitEngine.prototype.fetch = function() {
-  // TODO refactor to use rebase animation stuff!!
-  // ok so we essentially are always in "-force" mode, since we always assume
-  // the origin commits are downstream of where we are. Here is the outline:
-  //
-  // first we get the commits we need by exporting the origin tree and
-  // walking upwards until we hit the upstream set defined by origin/master.
-  //
-  // then we simply set the target of o/master to the target of master on
-  // the origin branch
-  var oldCommits = this.exportTree().commits;
-  // HAX HAX omg we will abuse our tree instantiation here :D
-  var originTree = this.origin.exportTree();
-  _.each(originTree.commits, function(commit, id) {
-    // if we have it, no worries
-    if (this.refs[id]) {
-      return;
-    }
-    // go make it!
-    var downloadedCommit = this.getOrMakeRecursive(originTree, this.refs, id);
-    this.commitCollection.add(downloadedCommit);
+GitEngine.prototype.fetch = function(options) {
+  options = options || {};
+  var localBranch = this.refs['o/master'];
+  var remoteBranch = this.origin.refs['master'];
+
+  // first check if this is even allowed by checking the sync between
+  this.checkUpstreamOfSource(
+    this,
+    this.origin,
+    localBranch,
+    remoteBranch
+  );
+
+  // then we get the difference in commits between these two graphs, ordered by
+  // depth
+  var commitsToMake = this.getTargetGraphDifference(
+    this,
+    this.origin,
+    localBranch,
+    remoteBranch
+  );
+
+  var makeCommit = _.bind(function(id, parentIDs) {
+    // need to get the parents first. since we order by depth, we know
+    // the dependencies are there already
+    var parents = _.map(parentIDs, function(parentID) {
+      return this.refs[parentID];
+    }, this);
+    return this.makeCommit(parents, id);
   }, this);
 
-  // since we now might have many commits more than before, lets
-  // check all the ones that didn't use to exist and make animations
-  var newCommits = this.exportTree().commits;
-  var commitsToAnimate = [];
-  _.each(newCommits, function(commit, id) {
-    if (oldCommits[id]) {
-      return;
-    }
-    commitsToAnimate.push(this.refs[id]);
-  }, this);
-
-  // now sort by id...
-  commitsToAnimate.sort(_.bind(this.idSortFunc, this));
-
-  _.each(commitsToAnimate, function(newCommit) {
-    this.animationFactory.genCommitBirthAnimation(
-      this.animationQueue,
+  // now make the promise chain to make each commit
+  var chainStep = _.bind(function(id, parents) {
+    var newCommit = makeCommit(id, parents);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
       newCommit,
       this.gitVisuals
     );
   }, this);
 
-  var originLocation = this.origin.exportTree().branches.master.target;
-  // yay! now we just set o/master and do a simple refresh
-  this.setTargetLocation(this.refs['o/master'], this.refs[originLocation]);
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(commitsToMake, function(commitJSON) {
+    chain = chain.then(_.bind(function() {
+      return AnimationFactory.playHighlightPromiseAnimation(
+        this.origin.refs[commitJSON.id],
+        localBranch
+      );
+    }, this));
+
+    chain = chain.then(function() {
+      return chainStep(
+        commitJSON.id,
+        commitJSON.parents
+      );
+    });
+  }, this);
+
+  chain = chain.then(_.bind(function() {
+    var originLocationID = remoteBranch.get('target').get('id');
+    var localCommit = this.refs[originLocationID];
+    this.setTargetLocation(localBranch, localCommit);
+    // unhighlight origin
+    AnimationFactory.playRefreshAnimation(this.origin.gitVisuals);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
+  }
+  return {
+    chain: chain,
+    deferred: deferred
+  };
 };
 
-GitEngine.prototype.originInitStarter = function() {
+GitEngine.prototype.pullStarter = function() {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  // eventually args go here
+  this.pull();
+};
+
+GitEngine.prototype.pull = function() {
+  var localBranch = this.refs['master'];
+  var remoteBranch = this.refs['o/master'];
+
+  // no matter what fetch
+  var pendingFetch = this.fetch({
+    dontResolvePromise: true
+  });
+  // then either rebase or merge
+  if (this.commandOptions['--rebase']) {
+    this.pullFinishWithRebase(pendingFetch, localBranch, remoteBranch);
+  } else {
+    this.pullFinishWithMerge(pendingFetch, localBranch, remoteBranch);
+  }
+};
+
+GitEngine.prototype.pullFinishWithRebase = function(
+  pendingFetch,
+  localBranch,
+  remoteBranch
+) {
+  var chain = pendingFetch.chain;
+  var deferred = pendingFetch.deferred;
+
+  // delay a bit after the intense refresh animation from
+  // fetch
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(300);
+  });
+
+  chain = chain.then(_.bind(function() {
+    // highlight last commit on o/master to color of
+    // local branch
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(remoteBranch),
+      localBranch
+    );
+  }, this));
+
+  chain = chain.then(_.bind(function() {
+    pendingFetch.dontResolvePromise = true;
+    return this.rebase(remoteBranch, localBranch, pendingFetch);
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
+};
+
+GitEngine.prototype.pullFinishWithMerge = function(
+  pendingFetch,
+  localBranch,
+  remoteBranch
+) {
+  var chain = pendingFetch.chain;
+  var deferred = pendingFetch.deferred;
+
+  // delay a bit after the intense refresh animation from
+  // fetch
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(300);
+  });
+  
+  chain = chain.then(_.bind(function() {
+    // highlight last commit on o/master to color of
+    // local branch
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(remoteBranch),
+      localBranch
+    );
+  }, this));
+
+  chain = chain.then(_.bind(function() {
+    // highlight commit on master to color of remote
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(localBranch),
+      remoteBranch
+    );
+  }, this));
+
+  // delay and merge
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(700);
+  });
+  chain = chain.then(_.bind(function() {
+    var newCommit = this.merge('o/master');
+    if (!newCommit) {
+      // it is a fast forward
+      return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+    }
+
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
+};
+
+GitEngine.prototype.cloneStarter = function() {
   this.acceptNoGeneralArgs();
   this.makeOrigin(this.printTree(this.exportTreeForBranch('master')));
 };
 
 GitEngine.prototype.fakeTeamworkStarter = function() {
-  this.acceptNoGeneralArgs();
   if (!this.hasOrigin()) {
     throw new GitError({
       msg: intl.str('git-error-origin-required')
     });
   }
 
-  var id = this.getUniqueID();
-  this.origin.receiveTeamwork(id, this.animationQueue);
+  this.validateArgBounds(this.generalArgs, 0, 1);
+  var numToMake = this.generalArgs[0] || 1;
+  this.fakeTeamwork(numToMake);
+};
+
+GitEngine.prototype.fakeTeamwork = function(numToMake) {
+  var makeOriginCommit = _.bind(function() {
+    var id = this.getUniqueID();
+    return this.origin.receiveTeamwork(id, this.animationQueue);
+  }, this);
+
+  var chainStep = _.bind(function() {
+    var newCommit = makeOriginCommit();
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.origin.gitVisuals
+    );
+  }, this);
+  var chainStepWrap = function() { return chainStep(); };
+
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(_.range(numToMake), function(i) {
+    chain = chain.then(function() {
+      return chainStep();
+    });
+  });
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 GitEngine.prototype.receiveTeamwork = function(id, animationQueue) {
   var newCommit = this.makeCommit([this.getCommitFromRef('HEAD')], id);
   this.setTargetLocation(this.HEAD, newCommit);
 
-  this.animationFactory.genCommitBirthAnimation(animationQueue, newCommit, this.gitVisuals);
+  return newCommit;
 };
 
-GitEngine.prototype.cherrypick = function(ref) {
-  var commit = this.getCommitFromRef(ref);
-
+GitEngine.prototype.cherrypick = function(commit) {
   // alter the ID slightly
   var id = this.rebaseAltID(commit.get('id'));
 
@@ -7906,7 +8229,12 @@ GitEngine.prototype.commitStarter = function() {
 
     newCommit.set('commitMessage', msg);
   }
-  this.animationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
+
+  var promise = AnimationFactory.playCommitBirthPromiseAnimation(
+    newCommit,
+    this.gitVisuals
+  );
+  this.animationQueue.thenFinish(promise);
 };
 
 GitEngine.prototype.commit = function() {
@@ -8229,20 +8557,10 @@ GitEngine.prototype.rebaseStarter = function() {
   }
 
   this.twoArgsImpliedHead(this.generalArgs);
-
-  var response = this.rebase(this.generalArgs[0], this.generalArgs[1]);
-
-  if (response === undefined) {
-    // was a fastforward or already up to date. returning now
-    // will trigger the refresh animation by not adding anything to
-    // the animation queue
-    return;
-  }
-
-  this.animationFactory.rebaseAnimation(this.animationQueue, response, this, this.gitVisuals);
+  this.rebase(this.generalArgs[0], this.generalArgs[1]);
 };
 
-GitEngine.prototype.rebase = function(targetSource, currentLocation) {
+GitEngine.prototype.rebase = function(targetSource, currentLocation, options) {
   // first some conditions
   if (this.isUpstreamOf(targetSource, currentLocation)) {
     this.command.setResult(intl.str('git-result-uptodate'));
@@ -8266,7 +8584,7 @@ GitEngine.prototype.rebase = function(targetSource, currentLocation) {
     return;
   }
 
-   // now the part of actually rebasing.
+  // now the part of actually rebasing.
   // We need to get the downstream set of targetSource first.
   // then we BFS from currentLocation, using the downstream set as our stopping point.
   // we need to BFS because we need to include all commits below
@@ -8293,7 +8611,7 @@ GitEngine.prototype.rebase = function(targetSource, currentLocation) {
     pQueue = pQueue.concat(popped.get('parents'));
   }
 
-  return this.rebaseFinish(toRebaseRough, stopSet, targetSource, currentLocation);
+  return this.rebaseFinish(toRebaseRough, stopSet, targetSource, currentLocation, options);
 };
 
 GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) {
@@ -8355,9 +8673,7 @@ GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) 
     }
 
     // finish the rebase crap and animate!
-    var animationData = this.rebaseFinish(userSpecifiedRebase, {}, targetSource, currentLocation);
-    this.animationFactory.rebaseAnimation(this.animationQueue, animationData, this, this.gitVisuals);
-    this.animationQueue.start();
+    this.rebaseFinish(userSpecifiedRebase, {}, targetSource, currentLocation);
   }, this))
   .fail(_.bind(function(err) {
     this.filterError(err);
@@ -8374,96 +8690,101 @@ GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) 
   });
 };
 
-GitEngine.prototype.rebaseFinish = function(toRebaseRough, stopSet, targetSource, currentLocation) {
-  // now we have the all the commits between currentLocation and the set of target to rebase.
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID(targetSource);
-
-  // we need to throw out merge commits
-  var toRebase = [];
-  _.each(toRebaseRough, function(commit) {
-    if (commit.get('parents').length == 1) {
-      toRebase.push(commit);
-    }
-  });
-
-  // we ALSO need to throw out commits that will do the same changes. like
-  // if the upstream set has a commit C4 and we have C4', we dont rebase the C4' again.
-  // get this by doing ID scraping
+GitEngine.prototype.filterRebaseCommits = function(toRebaseRough, stopSet) {
   var changesAlreadyMade = {};
   _.each(stopSet, function(val, key) {
-    changesAlreadyMade[this.scrapeBaseID(key)] = val; // val == true
+    changesAlreadyMade[this.scrapeBaseID(key)] = true;
   }, this);
-
-  // now get rid of the commits that will redo same changes
-  toRebaseRough = toRebase;
-  toRebase = [];
-  _.each(toRebaseRough, function(commit) {
-    var baseID = this.scrapeBaseID(commit.get('id'));
-    if (!changesAlreadyMade[baseID]) {
-      toRebase.push(commit);
-    }
-  }, this);
-
-  toRebaseRough = toRebase;
-  toRebase = [];
-  // finally, make the set unique
   var uniqueIDs = {};
-  _.each(toRebaseRough, function(commit) {
-    if (uniqueIDs[commit.get('id')]) { return; }
+
+  // resolve the commits we will rebase
+  return _.filter(toRebaseRough, function(commit) {
+    // no merge commits
+    if (commit.get('parents').length !== 1) {
+      return false;
+    }
+
+    // we ALSO need to throw out commits that will do the same changes. like
+    // if the upstream set has a commit C4 and we have C4', we dont rebase the C4' again.
+    var baseID = this.scrapeBaseID(commit.get('id'));
+    if (changesAlreadyMade[baseID]) {
+      return false;
+    }
+
+    // make unique
+    if (uniqueIDs[commit.get('id')]) {
+      return false;
+    }
 
     uniqueIDs[commit.get('id')] = true;
-    toRebase.push(commit);
+    return true;
   }, this);
+};
 
+GitEngine.prototype.rebaseFinish = function(
+  toRebaseRough,
+  stopSet,
+  targetSource,
+  currentLocation,
+  options
+) {
+  options = options || {};
+  // now we have the all the commits between currentLocation and the set of target to rebase.
+  var destinationBranch = this.resolveID(targetSource);
+  var deferred = options.deferred || Q.defer();
+  var chain = options.chain || deferred.promise;
+
+  var toRebase = this.filterRebaseCommits(toRebaseRough, stopSet);
   if (!toRebase.length) {
     throw new GitError({
       msg: intl.str('git-error-rebase-none')
     });
   }
 
-  animationResponse.toRebaseArray = toRebase.slice(0);
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toRebase,
+    destinationBranch
+  );
 
   // now pop all of these commits onto targetLocation
   var base = this.getCommitFromRef(targetSource);
-
-  // do the rebase, and also maintain all our animation info during this
-  animationResponse.rebaseSteps = [];
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
-  _.each(toRebase, function(old) {
-    var newId = this.rebaseAltID(old.get('id'));
-
+  // each step makes a new commit
+  var chainStep = _.bind(function(oldCommit) {
+    var newId = this.rebaseAltID(oldCommit.get('id'));
     var newCommit = this.makeCommit([base], newId);
     base = newCommit;
 
-    // animation info
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: old,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: afterSnapshot
-    });
-    beforeSnapshot = afterSnapshot;
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
 
-  if (this.resolveID(currentLocation).get('type') == 'commit') {
-    // we referenced a commit like git rebase C2 C1, so we have
-    // to manually check out C1'
+  // set up the promise chain
+  _.each(toRebase, function(commit) {
+    chain = chain.then(function() {
+      return chainStep(commit);
+    });
+  }, this);
 
-    var steps = animationResponse.rebaseSteps;
-    var newestCommit = steps[steps.length - 1].newCommit;
+  chain = chain.then(_.bind(function() {
+    if (this.resolveID(currentLocation).get('type') == 'commit') {
+      // we referenced a commit like git rebase C2 C1, so we have
+      // to manually check out C1'
+      this.checkout(base);
+    } else {
+      // now we just need to update the rebased branch is
+      this.setTargetLocation(currentLocation, base);
+      this.checkout(currentLocation);
+    }
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
 
-    this.checkout(newestCommit);
-  } else {
-    // now we just need to update the rebased branch is
-    this.setTargetLocation(currentLocation, base);
-    this.checkout(currentLocation);
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
   }
-
-  // for animation
-  return animationResponse;
+  return chain;
 };
 
 GitEngine.prototype.mergeStarter = function() {
@@ -8473,11 +8794,11 @@ GitEngine.prototype.mergeStarter = function() {
 
   if (newCommit === undefined) {
     // its just a fast forwrard
-    this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+    AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
     return;
   }
 
-  this.animationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
+  AnimationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
 };
 
 GitEngine.prototype.merge = function(targetSource) {
@@ -8624,7 +8945,15 @@ GitEngine.prototype.branchStarter = function() {
 
 
   if (this.generalArgs.length === 0) {
-    this.printBranches(this.getBranches());
+    var branches;
+    if (this.commandOptions['-a']) {
+      branches = this.getBranches();
+    } else if (this.commandOptions['-r']) {
+      branches = this.getRemoteBranches();
+    } else {
+      branches = this.getLocalBranches();
+    }
+    this.printBranches(branches);
     return;
   }
 
@@ -8633,12 +8962,19 @@ GitEngine.prototype.branchStarter = function() {
 };
 
 GitEngine.prototype.forceBranch = function(branchName, where) {
+  branchName = this.crappyUnescape(branchName);
   // if branchname doesn't exist...
   if (!this.refs[branchName]) {
     this.branch(branchName, where);
   }
 
   var branch = this.resolveID(branchName);
+  if (branch.getIsRemote()) {
+    throw new GitError({
+      msg: intl.str('git-error-remote-branch')
+    });
+  }
+
   if (branch.get('type') !== 'branch') {
     throw new GitError({
       msg: intl.str('git-error-options')
@@ -8662,7 +8998,6 @@ GitEngine.prototype.deleteBranch = function(name) {
   if (target.get('type') !== 'branch' ||
       target.get('id') == 'master' ||
       this.HEAD.get('target') === target) {
-
     throw new GitError({
       msg: intl.str('git-error-branch')
     });
@@ -8670,6 +9005,12 @@ GitEngine.prototype.deleteBranch = function(name) {
 
   // now we know it's a branch
   var branch = target;
+  // if its remote
+  if (target.getIsRemote()) {
+    throw new GitError({
+      msg: intl.str('git-error-remote-branch')
+    });
+  }
 
   this.branchCollection.remove(branch);
   this.refs[branch.get('id')] = undefined;
@@ -8697,7 +9038,7 @@ GitEngine.prototype.externalRefresh = function() {
   this.animationQueue = new AnimationQueue({
     callback: function() {}
   });
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
   this.animationQueue.start();
 };
 
@@ -8727,13 +9068,16 @@ GitEngine.prototype.dispatch = function(command, deferred) {
     return;
   }
 
+  var willStartAuto = this.animationQueue.get('defer') ||
+    this.animationQueue.get('promiseBased');
+
   // only add the refresh if we didn't do manual animations
-  if (!this.animationQueue.get('animations').length && !this.animationQueue.get('defer')) {
-    this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  if (!this.animationQueue.get('animations').length && !willStartAuto) {
+    AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
   }
 
   // animation queue will call the callback when its done
-  if (!this.animationQueue.get('defer')) {
+  if (!willStartAuto) {
     this.animationQueue.start();
   }
 };
@@ -9055,8 +9399,10 @@ exports.Ref = Ref;
 
 require.define("/src/js/visuals/animation/animationFactory.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 var Backbone = require('backbone');
+var Q = require('q');
 
 var Animation = require('./index').Animation;
+var PromiseAnimation = require('./index').PromiseAnimation;
 var GRAPHICS = require('../../util/constants').GRAPHICS;
 
 /******************
@@ -9069,24 +9415,15 @@ var GRAPHICS = require('../../util/constants').GRAPHICS;
  * and then essentially animate the entire tree too.
  */
 
-// essentially a static class
-var AnimationFactory = function() {
+// static class
+var AnimationFactory = {};
 
-};
-
-AnimationFactory.prototype.genCommitBirthAnimation = function(animationQueue, commit, gitVisuals) {
-  if (!animationQueue) {
-    throw new Error("Need animation queue to add closure to!");
-  }
-
+var makeCommitBirthAnimation = function(gitVisuals, visNode) {
   var time = GRAPHICS.defaultAnimationTime * 1.0;
   var bounceTime = time * 2;
 
-  // essentially refresh the entire tree, but do a special thing for the commit
-  var visNode = commit.get('visNode');
-
   var animation = function() {
-    // this takes care of refs and all that jazz, and updates all the positions
+    // essentially refresh the entire tree, but do a special thing for the commit
     gitVisuals.refreshTree(time);
 
     visNode.setBirth();
@@ -9096,61 +9433,86 @@ AnimationFactory.prototype.genCommitBirthAnimation = function(animationQueue, co
     visNode.animateUpdatedPosition(bounceTime, 'bounce');
     visNode.animateOutgoingEdges(time);
   };
+  return {
+    animation: animation,
+    duration: Math.max(time, bounceTime)
+  };
+};
+
+var makeHighlightAnimation = function(visNode, visBranch) {
+  var fullTime = GRAPHICS.defaultAnimationTime * 0.66;
+  var slowTime = fullTime * 2.0;
+
+  return {
+    animation: function() {
+      visNode.highlightTo(visBranch, slowTime, 'easeInOut');
+    },
+    duration: slowTime * 1.5
+  };
+};
+
+AnimationFactory.genCommitBirthAnimation = function(animationQueue, commit, gitVisuals) {
+  if (!animationQueue) {
+    throw new Error("Need animation queue to add closure to!");
+  }
+
+  var visNode = commit.get('visNode');
+  var anPack = makeCommitBirthAnimation(gitVisuals, visNode);
 
   animationQueue.add(new Animation({
-    closure: animation,
-    duration: Math.max(time, bounceTime)
+    closure: anPack.animation,
+    duration: anPack.duration
   }));
 };
 
-AnimationFactory.prototype.overrideOpacityDepth2 = function(attr, opacity) {
-  opacity = (opacity === undefined) ? 1 : opacity;
-
-  var newAttr = {};
-
-  _.each(attr, function(partObj, partName) {
-    newAttr[partName] = {};
-    _.each(partObj, function(val, key) {
-      if (key == 'opacity') {
-        newAttr[partName][key] = opacity;
-      } else {
-        newAttr[partName][key] = val;
-      }
-    });
-  });
-  return newAttr;
+AnimationFactory.genCommitBirthPromiseAnimation = function(commit, gitVisuals) {
+  var visNode = commit.get('visNode');
+  return new PromiseAnimation(makeCommitBirthAnimation(gitVisuals, visNode));
 };
 
-AnimationFactory.prototype.overrideOpacityDepth3 = function(snapShot, opacity) {
-  var newSnap = {};
-
-  _.each(snapShot, function(visObj, visID) {
-    newSnap[visID] = this.overrideOpacityDepth2(visObj, opacity);
+AnimationFactory.highlightEachWithPromise = function(
+  chain,
+  toHighlight,
+  destObj
+) {
+  _.each(toHighlight, function(commit) {
+    chain = chain.then(_.bind(function() {
+      return this.playHighlightPromiseAnimation(
+        commit,
+        destObj
+      );
+    }, this));
   }, this);
-  return newSnap;
+  return chain;
 };
 
-AnimationFactory.prototype.genCommitBirthClosureFromSnapshot = function(step, gitVisuals) {
-  var time = GRAPHICS.defaultAnimationTime * 1.0;
-  var bounceTime = time * 1.5;
-
-  var visNode = step.newCommit.get('visNode');
-  var afterAttrWithOpacity = this.overrideOpacityDepth2(step.afterSnapshot[visNode.getID()]);
-  var afterSnapWithOpacity = this.overrideOpacityDepth3(step.afterSnapshot);
-
-  var animation = function() {
-    visNode.setBirthFromSnapshot(step.beforeSnapshot);
-    visNode.parentInFront();
-    gitVisuals.visBranchesFront();
-
-    visNode.animateToAttr(afterAttrWithOpacity, bounceTime, 'bounce');
-    visNode.animateOutgoingEdgesToAttr(afterSnapWithOpacity, bounceTime);
-  };
-
-  return animation;
+AnimationFactory.playCommitBirthPromiseAnimation = function(commit, gitVisuals) {
+  var animation = this.genCommitBirthPromiseAnimation(commit, gitVisuals);
+  animation.play();
+  return animation.getPromise();
 };
 
-AnimationFactory.prototype.refreshTree = function(animationQueue, gitVisuals) {
+AnimationFactory.playRefreshAnimationAndFinish = function(gitVisuals, animationQueue) {
+  var animation = new PromiseAnimation({
+    closure: function() {
+      gitVisuals.refreshTree();
+    }
+  });
+  animation.play();
+  animationQueue.thenFinish(animation.getPromise());
+};
+
+AnimationFactory.playRefreshAnimation = function(gitVisuals) {
+  var animation = new PromiseAnimation({
+    closure: function() {
+      gitVisuals.refreshTree();
+    }
+  });
+  animation.play();
+  return animation.getPromise();
+};
+
+AnimationFactory.refreshTree = function(animationQueue, gitVisuals) {
   animationQueue.add(new Animation({
     closure: function() {
       gitVisuals.refreshTree();
@@ -9158,156 +9520,31 @@ AnimationFactory.prototype.refreshTree = function(animationQueue, gitVisuals) {
   }));
 };
 
-AnimationFactory.prototype.rebaseAnimation = function(animationQueue, rebaseResponse,
-                                                      gitEngine, gitVisuals) {
-
-  this.rebaseHighlightPart(animationQueue, rebaseResponse, gitEngine);
-  this.rebaseBirthPart(animationQueue, rebaseResponse, gitEngine, gitVisuals);
+AnimationFactory.genHighlightPromiseAnimation = function(commit, destObj) {
+  // could be branch or node
+  var visObj = destObj.get('visBranch') || destObj.get('visNode');
+  var visNode = commit.get('visNode');
+  return new PromiseAnimation(makeHighlightAnimation(visNode, visObj));
 };
 
-AnimationFactory.prototype.rebaseHighlightPart = function(animationQueue, rebaseResponse, gitEngine) {
-  var fullTime = GRAPHICS.defaultAnimationTime * 0.66;
-  var slowTime = fullTime * 2.0;
-
-  // we want to highlight all the old commits
-  var oldCommits = rebaseResponse.toRebaseArray;
-  // we are either highlighting to a visBranch or a visNode
-  var visBranch = rebaseResponse.destinationBranch.get('visBranch');
-  if (!visBranch) {
-    // in the case where we rebase onto a commit
-    visBranch = rebaseResponse.destinationBranch.get('visNode');
-  }
-
-  _.each(oldCommits, function(oldCommit) {
-    var visNode = oldCommit.get('visNode');
-    animationQueue.add(new Animation({
-      closure: function() {
-        visNode.highlightTo(visBranch, slowTime, 'easeInOut');
-      },
-      duration: fullTime * 1.5
-    }));
-
-  }, this);
-
-  this.delay(animationQueue, fullTime * 2);
+AnimationFactory.playHighlightPromiseAnimation = function(commit, destObj) {
+  var animation = this.genHighlightPromiseAnimation(commit, destObj);
+  animation.play();
+  return animation.getPromise();
 };
 
-AnimationFactory.prototype.rebaseBirthPart = function(animationQueue, rebaseResponse,
-                                                      gitEngine, gitVisuals) {
-  var rebaseSteps = rebaseResponse.rebaseSteps;
-
-  var newVisNodes = [];
-  _.each(rebaseSteps, function(step) {
-    var visNode = step.newCommit.get('visNode');
-
-    newVisNodes.push(visNode);
-    visNode.setOpacity(0);
-    visNode.setOutgoingEdgesOpacity(0);
-  }, this);
-
-  var previousVisNodes = [];
-  _.each(rebaseSteps, function(rebaseStep, index) {
-    var toOmit = newVisNodes.slice(index + 1);
-
-    var snapshotPart = this.genFromToSnapshotAnimation(
-      rebaseStep.beforeSnapshot,
-      rebaseStep.afterSnapshot,
-      toOmit,
-      previousVisNodes,
-      gitVisuals
-    );
-    var birthPart = this.genCommitBirthClosureFromSnapshot(rebaseStep, gitVisuals);
-
-    var animation = function() {
-      snapshotPart();
-      birthPart();
-    };
-
-    animationQueue.add(new Animation({
-      closure: animation,
-      duration: GRAPHICS.defaultAnimationTime * 1.5
-    }));
-
-    previousVisNodes.push(rebaseStep.newCommit.get('visNode'));
-  }, this);
-
-  // need to delay to let bouncing finish
-  this.delay(animationQueue);
-
-  this.refreshTree(animationQueue, gitVisuals);
+AnimationFactory.getDelayedPromise = function(amount) {
+  var deferred = Q.defer();
+  setTimeout(deferred.resolve, amount || 1000);
+  return deferred.promise;
 };
 
-AnimationFactory.prototype.delay = function(animationQueue, time) {
+AnimationFactory.delay = function(animationQueue, time) {
   time = time || GRAPHICS.defaultAnimationTime;
   animationQueue.add(new Animation({
     closure: function() { },
     duration: time
   }));
-};
-
-AnimationFactory.prototype.genSetAllCommitOpacities = function(visNodes, opacity) {
-  // need to slice for closure
-  var nodesToAnimate = visNodes.slice(0);
-
-  return function() {
-    _.each(nodesToAnimate, function(visNode) {
-      visNode.setOpacity(opacity);
-      visNode.setOutgoingEdgesOpacity(opacity);
-    });
-  };
-};
-
-AnimationFactory.prototype.stripObjectsFromSnapshot = function(snapShot, toOmit) {
-  var ids = [];
-  _.each(toOmit, function(obj) {
-    ids.push(obj.getID());
-  });
-
-  var newSnapshot = {};
-  _.each(snapShot, function(val, key) {
-    if (_.include(ids, key)) {
-      // omit
-      return;
-    }
-    newSnapshot[key] = val;
-  }, this);
-  return newSnapshot;
-};
-
-AnimationFactory.prototype.genFromToSnapshotAnimation = function(
-  beforeSnapshot,
-  afterSnapshot,
-  commitsToOmit,
-  commitsToFixOpacity,
-  gitVisuals) {
-
-  // we want to omit the commit outgoing edges
-  var toOmit = [];
-  _.each(commitsToOmit, function(visNode) {
-    toOmit.push(visNode);
-    toOmit = toOmit.concat(visNode.get('outgoingEdges'));
-  });
-
-  var fixOpacity = function(obj) {
-    if (!obj) { return; }
-    _.each(obj, function(attr, partName) {
-      obj[partName].opacity = 1;
-    });
-  };
-
-  // HORRIBLE loop to fix opacities all throughout the snapshot
-  _.each([beforeSnapshot, afterSnapshot], function(snapShot) {
-    _.each(commitsToFixOpacity, function(visNode) {
-      fixOpacity(snapShot[visNode.getID()]);
-      _.each(visNode.get('outgoingEdges'), function(visEdge) {
-        fixOpacity(snapShot[visEdge.getID()]);
-      });
-    });
-  });
-
-  return function() {
-    gitVisuals.animateAllFromAttrToAttr(beforeSnapshot, afterSnapshot, toOmit);
-  };
 };
 
 exports.AnimationFactory = AnimationFactory;
@@ -9316,6 +9553,7 @@ exports.AnimationFactory = AnimationFactory;
 });
 
 require.define("/src/js/visuals/animation/index.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
+var Q = require('q');
 var Backbone = require('backbone');
 var GLOBAL = require('../../util/constants').GLOBAL;
 
@@ -9345,13 +9583,24 @@ var AnimationQueue = Backbone.Model.extend({
     animations: null,
     index: 0,
     callback: null,
-    defer: false
+    defer: false,
+    promiseBased: false
   },
 
   initialize: function(options) {
     this.set('animations', []);
     if (!options.callback) {
       console.warn('no callback');
+    }
+  },
+
+  thenFinish: function(promise, deferred) {
+    promise.then(_.bind(function() {
+      this.finish();
+    }, this));
+    this.set('promiseBased', true);
+    if (deferred) {
+      deferred.resolve();
     }
   },
 
@@ -9381,6 +9630,7 @@ var AnimationQueue = Backbone.Model.extend({
     // ok so call the first animation, and then set a timeout to call the next.
     // since an animation is defined as taking a specific amount of time,
     // we can simply just use timeouts rather than promises / deferreds.
+
     // for graphical displays that require an unknown amount of time, use deferreds
     // but not animation queue (see the finishAnimation for that)
     var animations = this.get('animations');
@@ -9402,7 +9652,48 @@ var AnimationQueue = Backbone.Model.extend({
   }
 });
 
+var PromiseAnimation = Backbone.Model.extend({
+  defaults: {
+    deferred: null,
+    closure: null,
+    duration: 300
+  },
+
+  initialize: function(options) {
+    if (!options.closure && !options.animation) {
+      throw new Error('need closure or animation');
+    }
+    this.set('closure', options.closure || options.animation);
+    this.set('deferred', options.deferred || Q.defer());
+  },
+
+  getPromise: function() {
+    return this.get('deferred').promise;
+  },
+
+  play: function() {
+    // a single animation is just something with a timeout, but now
+    // we want to resolve a deferred when the animation finishes
+    this.get('closure')();
+    setTimeout(_.bind(function() {
+      this.get('deferred').resolve();
+    }, this), this.get('duration'));
+  },
+
+  then: function(func) {
+    return this.get('deferred').promise.then(func);
+  }
+});
+
+PromiseAnimation.fromAnimation = function(animation) {
+  return new PromiseAnimation({
+    closure: animation.get('closure'),
+    duration: animation.get('duration')
+  });
+};
+
 exports.Animation = Animation;
+exports.PromiseAnimation = PromiseAnimation;
 exports.AnimationQueue = AnimationQueue;
 
 });
@@ -9410,18 +9701,43 @@ exports.AnimationQueue = AnimationQueue;
 require.define("/src/js/git/treeCompare.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 
 // static class...
-function TreeCompare() {
+var TreeCompare = {};
 
-}
+TreeCompare.dispatchFromLevel = function(levelBlob, treeToCompare) {
+  var goalTreeString = levelBlob.goalTreeString;
+  return TreeCompare.dispatch(levelBlob, goalTreeString, treeToCompare);
+};
 
-TreeCompare.prototype.compareAllBranchesWithinTreesAndHEAD = function(treeA, treeB) {
+TreeCompare.dispatch = function(levelBlob, goalTreeString, treeToCompare) {
+  var getAroundLintTrue = true;
+  // i actually prefer this to else if
+  switch (getAroundLintTrue) {
+    case !!levelBlob.compareOnlyMaster:
+      return TreeCompare.compareBranchWithinTrees(treeToCompare, goalTreeString, 'master');
+    case !!levelBlob.compareOnlyBranches:
+      return TreeCompare.compareAllBranchesWithinTrees(treeToCompare, goalTreeString);
+    case !!levelBlob.compareAllBranchesHashAgnostic:
+      return TreeCompare.compareAllBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString);
+    case !!levelBlob.compareOnlyMasterHashAgnostic:
+      return TreeCompare.compareBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString, ['master']);
+    case !!levelBlob.compareOnlyMasterHashAgnosticWithAsserts:
+      return TreeCompare.compareBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString, ['master']) &&
+        TreeCompare.evalAsserts(treeToCompare, levelBlob.goalAsserts);
+    default:
+      return TreeCompare.compareAllBranchesWithinTreesAndHEAD(treeToCompare, goalTreeString);
+  }
+};
+
+// would love to have copy properties here.. :(
+TreeCompare.compareAllBranchesWithinTreesAndHEAD = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
+  debugger;
 
   return treeA.HEAD.target == treeB.HEAD.target && this.compareAllBranchesWithinTrees(treeA, treeB);
 };
 
-TreeCompare.prototype.compareAllBranchesWithinTrees = function(treeA, treeB) {
+TreeCompare.compareAllBranchesWithinTrees = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
 
@@ -9438,7 +9754,7 @@ TreeCompare.prototype.compareAllBranchesWithinTrees = function(treeA, treeB) {
   return result;
 };
 
-TreeCompare.prototype.compareBranchesWithinTrees = function(treeA, treeB, branches) {
+TreeCompare.compareBranchesWithinTrees = function(treeA, treeB, branches) {
   var result = true;
   _.each(branches, function(branchName) {
     result = result && this.compareBranchWithinTrees(treeA, treeB, branchName);
@@ -9447,7 +9763,7 @@ TreeCompare.prototype.compareBranchesWithinTrees = function(treeA, treeB, branch
   return result;
 };
 
-TreeCompare.prototype.compareBranchWithinTrees = function(treeA, treeB, branchName) {
+TreeCompare.compareBranchWithinTrees = function(treeA, treeB, branchName) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
   this.reduceTreeFields([treeA, treeB]);
@@ -9460,7 +9776,7 @@ TreeCompare.prototype.compareBranchWithinTrees = function(treeA, treeB, branchNa
     recurseCompare(treeA.commits[branchA.target], treeB.commits[branchB.target]);
 };
 
-TreeCompare.prototype.compareAllBranchesWithinTreesHashAgnostic = function(treeA, treeB) {
+TreeCompare.compareAllBranchesWithinTreesHashAgnostic = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
   this.reduceTreeFields([treeA, treeB]);
@@ -9476,7 +9792,7 @@ TreeCompare.prototype.compareAllBranchesWithinTreesHashAgnostic = function(treeA
   return this.compareBranchesWithinTreesHashAgnostic(treeA, treeB, branchNames);
 };
 
-TreeCompare.prototype.compareBranchesWithinTreesHashAgnostic = function(treeA, treeB, branches) {
+TreeCompare.compareBranchesWithinTreesHashAgnostic = function(treeA, treeB, branches) {
   // we can't DRY unfortunately here because we need a special _.isEqual function
   // for both the recursive compare and the branch compare
   treeA = this.convertTreeSafe(treeA);
@@ -9511,17 +9827,15 @@ TreeCompare.prototype.compareBranchesWithinTreesHashAgnostic = function(treeA, t
   return result;
 };
 
-TreeCompare.prototype.evalAsserts = function(tree, assertsPerBranch) {
+TreeCompare.evalAsserts = function(tree, assertsPerBranch) {
   var result = true;
   _.each(assertsPerBranch, function(asserts, branchName) {
     result = result && this.evalAssertsOnBranch(tree, branchName, asserts);
   }, this);
-
-  console.log('EVAL ASSETS was', result);
   return result;
 };
 
-TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) {
+TreeCompare.evalAssertsOnBranch = function(tree, branchName, asserts) {
   tree = this.convertTreeSafe(tree);
 
   // here is the outline:
@@ -9529,7 +9843,6 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   // * go to the branch given by the key
   // * traverse upwards, storing the amount of hashes on each in the data object
   // * then come back and perform functions on data
-  console.log('doing asserts on', branchName);
 
   if (!tree.branches[branchName]) {
     return false;
@@ -9540,19 +9853,17 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   var data = {};
   while (queue.length) {
     var commitRef = queue.pop();
-    console.log(commitRef);
     data[this.getBaseRef(commitRef)] = this.getNumHashes(commitRef);
-
     queue = queue.concat(tree.commits[commitRef].parents);
   }
 
-  console.log('data is', data);
   var result = true;
   _.each(asserts, function(assert) {
     try {
       result = result && assert(data);
     } catch (err) {
-      console.err(err);
+      console.warn('error during assert', err);
+      console.log(err);
       result = false;
     }
   });
@@ -9560,7 +9871,7 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   return result;
 };
 
-TreeCompare.prototype.getNumHashes = function(ref) {
+TreeCompare.getNumHashes = function(ref) {
   var regexMap = [
     [/^C(\d+)([']{0,3})$/, function(bits) {
       if (!bits[2]) {
@@ -9584,7 +9895,7 @@ TreeCompare.prototype.getNumHashes = function(ref) {
   throw new Error('coudlnt parse ref ' + ref);
 };
 
-TreeCompare.prototype.getBaseRef = function(ref) {
+TreeCompare.getBaseRef = function(ref) {
   var idRegex = /^C(\d+)/;
   var bits = idRegex.exec(ref);
   if (!bits) { throw new Error('no regex matchy for ' + ref); }
@@ -9593,7 +9904,7 @@ TreeCompare.prototype.getBaseRef = function(ref) {
   return 'C' + bits[1];
 };
 
-TreeCompare.prototype.getRecurseCompareHashAgnostic = function(treeA, treeB) {
+TreeCompare.getRecurseCompareHashAgnostic = function(treeA, treeB) {
   // here we pass in a special comparison function to pass into the base
   // recursive compare.
 
@@ -9619,7 +9930,7 @@ TreeCompare.prototype.getRecurseCompareHashAgnostic = function(treeA, treeB) {
   return this.getRecurseCompare(treeA, treeB, {isEqual: isEqual});
 };
 
-TreeCompare.prototype.getRecurseCompare = function(treeA, treeB, options) {
+TreeCompare.getRecurseCompare = function(treeA, treeB, options) {
   options = options || {};
 
   // we need a recursive comparison function to bubble up the branch
@@ -9652,14 +9963,14 @@ TreeCompare.prototype.getRecurseCompare = function(treeA, treeB, options) {
   return recurseCompare;
 };
 
-TreeCompare.prototype.convertTreeSafe = function(tree) {
+TreeCompare.convertTreeSafe = function(tree) {
   if (typeof tree == 'string') {
     return JSON.parse(unescape(tree));
   }
   return tree;
 };
 
-TreeCompare.prototype.reduceTreeFields = function(trees) {
+TreeCompare.reduceTreeFields = function(trees) {
   var commitSaveFields = [
     'parents',
     'id',
@@ -9705,7 +10016,7 @@ TreeCompare.prototype.reduceTreeFields = function(trees) {
   });
 };
 
-TreeCompare.prototype.compareTrees = function(treeA, treeB) {
+TreeCompare.compareTrees = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
 
@@ -10053,6 +10364,10 @@ var PositiveNegativeBase = BaseView.extend({
     this.navEvents.trigger('positive');
   },
 
+  exit: function() {
+    this.navEvents.trigger('exit');
+  },
+
   negative: function() {
     this.navEvents.trigger('negative');
   }
@@ -10151,7 +10466,13 @@ var LeftRightView = PositiveNegativeBase.extend({
   template: _.template($('#left-right-template').html()),
   events: {
     'click .left': 'negative',
+    'click .exit': 'exit',
     'click .right': 'positive'
+  },
+
+  exit: function() {
+    this.pipeEvents.trigger('exit');
+    LeftRightView.__super__.exit.apply(this);
   },
 
   positive: function() {
@@ -10708,6 +11029,9 @@ var CommandsHelperBar = HelperBar.extend({
       text: 'Undo',
       id: 'undo'
     }, {
+      text: 'Objective',
+      id: 'objectve'
+    }, {
       text: 'Help',
       id: 'help'
     }, {
@@ -10719,6 +11043,10 @@ var CommandsHelperBar = HelperBar.extend({
   fireCommand: function() {
     log.viewInteracted('helperBar');
     HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
+  onObjectiveClick: function() {
+    this.fireCommand('objective');
   },
 
   onLevelsClick: function() {
@@ -13346,9 +13674,11 @@ var regexMap = {
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
   'git cherry-pick': /^git +cherry-pick($|\s)/,
-  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fakeTeamwork': /^git +fakeTeamwork($|\s)/,
   'git fetch': /^git +fetch *?$/,
-  'git originInit': /^git +originInit *?$/
+  'git pull': /^git +pull($|\s)/,
+  'git push': /^git +push($|\s)/,
+  'git clone': /^git +clone *?$/
 };
 
 var parse = function(str) {
@@ -13416,6 +13746,8 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-d': false,
       '-D': false,
       '-f': false,
+      '-a': false,
+      '-r': false,
       '--contains': false
     },
     checkout: {
@@ -13433,8 +13765,12 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
     },
     revert: {},
     show: {},
-    originInit: {},
+    clone: {},
     fetch: {},
+    pull: {
+      '--rebase': false
+    },
+    push: {},
     fakeTeamwork: {}
   };
 };
@@ -14283,6 +14619,7 @@ var MultiView = Backbone.View.extend({
     this.navEvents.on('negative', this.getNegFunc(), this);
     this.navEvents.on('positive', this.getPosFunc(), this);
     this.navEvents.on('quit', this.finish, this);
+    this.navEvents.on('exit', this.finish, this);
 
     this.keyboardListener = new KeyboardListener({
       events: this.navEvents,
@@ -16129,6 +16466,7 @@ var VisNode = VisBase.extend({
       circle: {
         fill: color,
         stroke: color,
+        'stroke-dasharray': '',
         'stroke-width': this.get('stroke-width') * 5
       },
       text: {}
@@ -16590,6 +16928,7 @@ var VisBranch = VisBase.extend({
       // switch to a head ref
       this.set('isHead', true);
       this.set('flip', -1);
+      this.refreshOffset();
 
       this.set('fill', GRAPHICS.headRectFill);
     } else if (id !== 'master') {
@@ -16602,11 +16941,12 @@ var VisBranch = VisBase.extend({
     var commit = this.gitEngine.getCommitFromRef(this.get('branch'));
     var visNode = commit.get('visNode');
 
-    this.set('flip', this.getFlipBool(commit, visNode));
+    this.set('flip', this.getFlipValue(commit, visNode));
+    this.refreshOffset();
     return visNode.getScreenCoords();
   },
 
-  getFlipBool: function(commit, visNode) {
+  getFlipValue: function(commit, visNode) {
     var threshold = this.get('gitVisuals').getFlipPos();
     var overThreshold = (visNode.get('pos').x > threshold);
 
@@ -16622,6 +16962,27 @@ var VisBranch = VisBase.extend({
       return (this.isBranchStackEmpty()) ? -1 : 1;
     } else {
       return (this.isBranchStackEmpty()) ? 1 : -1;
+    }
+  },
+
+  refreshOffset: function() {
+    var baseOffsetX = GRAPHICS.nodeRadius * 4.75;
+    var offsetY = 33;
+    var deltaX = 10;
+    if (this.get('flip') === 1) {
+      this.set('offsetY', -offsetY);
+      this.set('offsetX', baseOffsetX - deltaX);
+    } else {
+      this.set('offsetY', offsetY);
+      this.set('offsetX', baseOffsetX - deltaX);
+    }
+  },
+
+  getArrowTransform: function() {
+    if (this.get('flip') === 1) {
+      return 't-2,-20R-35';
+    } else {
+      return 't2,20R-35';
     }
   },
 
@@ -16988,6 +17349,7 @@ var VisBranch = VisBase.extend({
         opacity: nonTextOpacity,
         fill: this.getFill(),
         stroke: this.get('stroke'),
+        transform: this.getArrowTransform(),
         'stroke-width': this.get('stroke-width')
       }
     };
@@ -21845,6 +22207,23 @@ var Command = require('../models/commandModel').Command;
 var mock = require('../util/mock').mock;
 var util = require('../util');
 
+function getMockFactory() {
+  var mockFactory = {};
+  var mockReturn = function() {
+    return Q.defer().promise;
+  };
+  for (var key in AnimationFactory) {
+    mockFactory[key] = mockReturn;
+  }
+  // special method that does stuff
+  mockFactory.playRefreshAnimationAndFinish = function(gitVisuals, aQueue) {
+    console.log('trying to finish');
+    aQueue.thenFinish(Q.defer().promise);
+  };
+
+  return mockFactory;
+}
+
 var HeadlessGit = function() {
   this.init();
 };
@@ -21852,11 +22231,10 @@ var HeadlessGit = function() {
 HeadlessGit.prototype.init = function() {
   this.commitCollection = new CommitCollection();
   this.branchCollection = new BranchCollection();
-  this.treeCompare = new TreeCompare();
 
   // here we mock visuals and animation factory so the git engine
   // is headless
-  var animationFactory = mock(AnimationFactory);
+  var animationFactory = getMockFactory();
   var gitVisuals = mock(GitVisuals);
 
   this.gitEngine = new GitEngine({
@@ -22509,9 +22887,11 @@ var regexMap = {
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
   'git cherry-pick': /^git +cherry-pick($|\s)/,
-  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fakeTeamwork': /^git +fakeTeamwork($|\s)/,
   'git fetch': /^git +fetch *?$/,
-  'git originInit': /^git +originInit *?$/
+  'git pull': /^git +pull($|\s)/,
+  'git push': /^git +push($|\s)/,
+  'git clone': /^git +clone *?$/
 };
 
 var parse = function(str) {
@@ -22579,6 +22959,8 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-d': false,
       '-D': false,
       '-f': false,
+      '-a': false,
+      '-r': false,
       '--contains': false
     },
     checkout: {
@@ -22596,8 +22978,12 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
     },
     revert: {},
     show: {},
-    originInit: {},
+    clone: {},
     fetch: {},
+    pull: {
+      '--rebase': false
+    },
+    push: {},
     fakeTeamwork: {}
   };
 };
@@ -22753,6 +23139,23 @@ var Command = require('../models/commandModel').Command;
 var mock = require('../util/mock').mock;
 var util = require('../util');
 
+function getMockFactory() {
+  var mockFactory = {};
+  var mockReturn = function() {
+    return Q.defer().promise;
+  };
+  for (var key in AnimationFactory) {
+    mockFactory[key] = mockReturn;
+  }
+  // special method that does stuff
+  mockFactory.playRefreshAnimationAndFinish = function(gitVisuals, aQueue) {
+    console.log('trying to finish');
+    aQueue.thenFinish(Q.defer().promise);
+  };
+
+  return mockFactory;
+}
+
 var HeadlessGit = function() {
   this.init();
 };
@@ -22760,11 +23163,10 @@ var HeadlessGit = function() {
 HeadlessGit.prototype.init = function() {
   this.commitCollection = new CommitCollection();
   this.branchCollection = new BranchCollection();
-  this.treeCompare = new TreeCompare();
 
   // here we mock visuals and animation factory so the git engine
   // is headless
-  var animationFactory = mock(AnimationFactory);
+  var animationFactory = getMockFactory();
   var gitVisuals = mock(GitVisuals);
 
   this.gitEngine = new GitEngine({
@@ -22799,7 +23201,7 @@ var Q = require('q');
 
 var intl = require('../intl');
 
-var AnimationFactoryModule = require('../visuals/animation/animationFactory');
+var AnimationFactory = require('../visuals/animation/animationFactory').AnimationFactory;
 var AnimationQueue = require('../visuals/animation').AnimationQueue;
 var TreeCompare = require('./treeCompare').TreeCompare;
 
@@ -22822,8 +23224,10 @@ function GitEngine(options) {
   this.eventBaton = options.eventBaton;
   this.eventBaton.stealBaton('processGitCommand', this.dispatch, this);
 
-  this.animationFactory = options.animationFactory ||
-    new AnimationFactoryModule.AnimationFactory();
+  // poor man's dependency injection
+  if (options.animationFactory) {
+    AnimationFactory = options.animationFactory;
+  }
 
   // global variable to keep track of the options given
   // along with the command call.
@@ -22838,7 +23242,7 @@ GitEngine.prototype.initUniqueID = function() {
   this.uniqueId = (function() {
     var n = 0;
     return function(prepend) {
-      return prepend? prepend + n++ : n++;
+      return prepend ? prepend + n++ : n++;
     };
   })();
 };
@@ -22957,7 +23361,7 @@ GitEngine.prototype.exportTree = function() {
 
 GitEngine.prototype.printTree = function(tree) {
   tree = tree || this.exportTree();
-  TreeCompare.prototype.reduceTreeFields([tree]);
+  TreeCompare.reduceTreeFields([tree]);
 
   var str = JSON.stringify(tree);
   if (/'/.test(str)) {
@@ -23047,19 +23451,19 @@ GitEngine.prototype.makeOrigin = function(treeString) {
   });
 
   // defer the starting of our animation until origin has been created
-  this.animationQueue.set('defer', true);
+  this.animationQueue.set('promiseBased', true);
   originVis.customEvents.on('gitEngineReady', function() {
     this.origin = originVis.gitEngine;
     originVis.gitEngine.assignLocalRepo(this);
     // and then here is the crazy part -- we need the ORIGIN to refresh
     // itself in a separate animation. @_____@
     this.origin.externalRefresh();
-    this.animationQueue.start();
+    AnimationFactory.playRefreshAnimationAndFinish(this.gitVisuals, this.animationQueue);
   }, this);
 
   // TODO handle the case where the master target on origin is not present
   // locally, so we have to go up the chain. for now we assume the master on
-  // origin is at least present
+  // origin is at least present.
   var originTree = JSON.parse(unescape(treeString));
   var originMasterTarget = originTree.branches.master.target;
   var originMaster = this.makeBranch(
@@ -23067,9 +23471,6 @@ GitEngine.prototype.makeOrigin = function(treeString) {
     this.getCommitFromRef(originMasterTarget)
   );
   originMaster.set('remote', true);
-
-  // add a simple refresh animation
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
 };
 
 GitEngine.prototype.getOrMakeRecursive = function(tree, createdSoFar, objID) {
@@ -23247,10 +23648,25 @@ GitEngine.prototype.getBranches = function() {
       id: branch.get('id'),
       selected: this.HEAD.get('target') === branch,
       target: branch.get('target'),
+      remote: branch.getIsRemote(),
       obj: branch
     });
   }, this);
   return toReturn;
+};
+
+GitEngine.prototype.getRemoteBranches = function() {
+  var all = this.getBranches();
+  return _.filter(all, function(branchJSON) {
+    return branchJSON.remote === true;
+  });
+};
+
+GitEngine.prototype.getLocalBranches = function() {
+  var all = this.getBranches();
+  return _.filter(all, function(branchJSON) {
+    return branchJSON.remote === false;
+  });
 };
 
 GitEngine.prototype.printBranchesWithout = function(without) {
@@ -23376,64 +23792,58 @@ GitEngine.prototype.twoArgsImpliedHead = function(args, option) {
 GitEngine.prototype.revertStarter = function() {
   this.validateArgBounds(this.generalArgs, 1, NaN);
 
-  var response = this.revert(this.generalArgs);
-
-  if (response) {
-    this.animationFactory.rebaseAnimation(this.animationQueue, response, this, this.gitVisuals);
-  }
+  this.revert(this.generalArgs);
 };
 
 GitEngine.prototype.revert = function(whichCommits) {
-  // for each commit, we want to revert it
-  var toRebase = [];
-  _.each(whichCommits, function(stringRef) {
-    toRebase.push(this.getCommitFromRef(stringRef));
+  // resolve the commits we will rebase
+  var toRevert = _.map(whichCommits, function(stringRef) {
+    return this.getCommitFromRef(stringRef);
   }, this);
 
-  // we animate reverts now!! we use the rebase animation though so that's
-  // why the terminology is like it is
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID(toRebase[0]);
-  animationResponse.toRebaseArray = toRebase.slice(0);
-  animationResponse.rebaseSteps = [];
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+  var destBranch = this.resolveID('HEAD');
 
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toRevert,
+    destBranch
+  );
 
-  // now make a bunch of commits on top of where we are
   var base = this.getCommitFromRef('HEAD');
-  _.each(toRebase, function(oldCommit) {
+  // each step makes a new commit
+  var chainStep = _.bind(function(oldCommit) {
     var newId = this.rebaseAltID(oldCommit.get('id'));
-
-    var commitMessage = intl.str(
-      'git-revert-msg',
-      {
-        oldCommit: this.resolveName(oldCommit),
-        oldMsg: oldCommit.get('commitMessage')
-      }
-    );
-
+    var commitMessage = intl.str('git-revert-msg', {
+      oldCommit: this.resolveName(oldCommit),
+      oldMsg: oldCommit.get('commitMessage')
+    });
     var newCommit = this.makeCommit([base], newId, {
       commitMessage: commitMessage
     });
-
     base = newCommit;
 
-    // animation stuff
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: oldCommit,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: afterSnapshot
-    });
-    beforeSnapshot = afterSnapshot;
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
-  // done! update our location
-  this.setTargetLocation('HEAD', base);
 
-  // animation
-  return animationResponse;
+  // set up the promise chain
+  _.each(toRevert, function(commit) {
+    chain = chain.then(function() {
+      return chainStep(commit);
+    });
+  }, this);
+
+  // done! update our location
+  chain = chain.then(_.bind(function() {
+    this.setTargetLocation('HEAD', base);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 GitEngine.prototype.resetStarter = function() {
@@ -23470,7 +23880,7 @@ GitEngine.prototype.cherrypickStarter = function() {
 
   var set = this.getUpstreamSet('HEAD');
   // first resolve all the refs (as an error check)
-  _.each(this.generalArgs, function(arg) {
+  var toCherrypick = _.map(this.generalArgs, function(arg) {
     var commit = this.getCommitFromRef(arg);
     // and check that its not upstream
     if (set[commit.get('id')]) {
@@ -23481,41 +23891,201 @@ GitEngine.prototype.cherrypickStarter = function() {
         )
       });
     }
+    return commit;
   }, this);
+
   // error checks are all good, lets go!
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+  var destinationBranch = this.resolveID('HEAD');
 
-  // hack up the rebase response to animate this better
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID('HEAD');
-  animationResponse.toRebaseArray = [];
-  animationResponse.rebaseSteps = [];
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toCherrypick,
+    destinationBranch
+  );
 
-  // now lets start going through
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
-  var newCommit;
-  _.each(this.generalArgs, function(arg) {
-    var oldCommit = this.getCommitFromRef(arg);
-    animationResponse.toRebaseArray.push(oldCommit);
-
-    newCommit = this.cherrypick(arg);
-
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: oldCommit,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: this.gitVisuals.genSnapshot()
-    });
-    beforeSnapshot = afterSnapshot;
+  var chainStep = _.bind(function(commit) {
+    var newCommit = this.cherrypick(commit);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
 
-  this.animationFactory.rebaseAnimation(this.animationQueue, animationResponse, this, this.gitVisuals);
+  _.each(toCherrypick, function(arg) {
+    chain = chain.then(function() {
+      return chainStep(arg);
+    });
+  }, this);
+
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 /*************************************
  * Origin stuff!
  ************************************/
+
+GitEngine.prototype.checkUpstreamOfSource = function(
+  target,
+  source,
+  targetBranch,
+  sourceBranch,
+  errorMsg
+) {
+  // here we are downloading some X number of commits from source onto
+  // target. Hence target should be strictly upstream of source
+
+  // lets first get the upstream set from source's dest branch
+  var upstream = source.getUpstreamSet(sourceBranch);
+
+  var targetLocationID = target.getCommitFromRef(targetBranch).get('id');
+  if (!upstream[targetLocationID]) {
+    throw new GitError({
+      msg: errorMsg || intl.str('git-error-origin-fetch-no-ff')
+    });
+  }
+};
+
+GitEngine.prototype.getTargetGraphDifference = function(
+  target,
+  source,
+  targetBranch,
+  sourceBranch
+) {
+  sourceBranch = source.resolveID(sourceBranch);
+
+  var targetSet = target.getUpstreamSet(targetBranch);
+  var sourceStartCommit = source.getCommitFromRef(sourceBranch);
+
+  var sourceTree = source.exportTree();
+  var sourceStartCommitJSON = sourceTree.commits[sourceStartCommit.get('id')];
+
+  if (target.refs[sourceStartCommitJSON.id]) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-fetch-uptodate')
+    });
+  }
+
+  // ok great, we have our starting point and our stopping set. lets go ahead
+  // and traverse upwards and keep track of depth manually
+  sourceStartCommitJSON.depth = 0;
+  var difference = [];
+  var toExplore = [sourceStartCommitJSON];
+
+  var pushParent = function(parentID) {
+    if (targetSet[parentID]) {
+      // we already have this commit, lets bounce
+      return;
+    }
+
+    var parentJSON = sourceTree.commits[parentID];
+    parentJSON.depth = here.depth + 1;
+    toExplore.push(parentJSON);
+  };
+
+  while (toExplore.length) {
+    var here = toExplore.pop();
+    difference.push(here);
+    _.each(here.parents, pushParent);
+  }
+
+  return difference.sort(function(cA, cB) {
+    // reverse sort by depth
+    return cB.depth - cA.depth;
+  });
+};
+
+GitEngine.prototype.pushStarter = function(options) {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  this.push();
+};
+
+GitEngine.prototype.push = function(options) {
+  options = options || {};
+  var localBranch = this.refs['master'];
+  var remoteBranch = this.origin.refs['master'];
+
+  // first check if this is even allowed by checking the sync between
+  this.checkUpstreamOfSource(
+    this,
+    this.origin,
+    remoteBranch,
+    localBranch,
+    intl.str('git-error-origin-push-no-ff')
+  );
+
+  var commitsToMake = this.getTargetGraphDifference(
+    this.origin,
+    this,
+    remoteBranch,
+    localBranch
+  );
+
+  var makeCommit = _.bind(function(id, parentIDs) {
+    // need to get the parents first. since we order by depth, we know
+    // the dependencies are there already
+    var parents = _.map(parentIDs, function(parentID) {
+      return this.origin.refs[parentID];
+    }, this);
+    return this.origin.makeCommit(parents, id);
+  }, this);
+
+  // now make the promise chain to make each commit
+  var chainStep = _.bind(function(id, parents) {
+    var newCommit = makeCommit(id, parents);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.origin.gitVisuals
+    );
+  }, this);
+
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(commitsToMake, function(commitJSON) {
+    chain = chain.then(_.bind(function() {
+      return AnimationFactory.playHighlightPromiseAnimation(
+        this.refs[commitJSON.id],
+        remoteBranch
+      );
+    }, this));
+
+    chain = chain.then(function() {
+      return chainStep(
+        commitJSON.id,
+        commitJSON.parents
+      );
+    });
+  }, this);
+
+  chain = chain.then(_.bind(function() {
+    var localLocationID = localBranch.get('target').get('id');
+    var remoteCommit = this.origin.refs[localLocationID];
+    this.origin.setTargetLocation(remoteBranch, remoteCommit);
+    // unhighlight local
+    AnimationFactory.playRefreshAnimation(this.gitVisuals);
+    return AnimationFactory.playRefreshAnimation(this.origin.gitVisuals);
+  }, this));
+
+  // HAX HAX update o/master
+  chain = chain.then(_.bind(function() {
+    var localLocationID = localBranch.get('target').get('id');
+    var localCommit = this.refs[localLocationID];
+    // HAX HAX
+    this.setTargetLocation(this.refs['o/master'], localCommit);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
+  }
+};
 
 GitEngine.prototype.fetchStarter = function() {
   if (!this.hasOrigin()) {
@@ -23527,84 +24097,243 @@ GitEngine.prototype.fetchStarter = function() {
   this.fetch();
 };
 
-GitEngine.prototype.fetch = function() {
-  // TODO refactor to use rebase animation stuff!!
-  // ok so we essentially are always in "-force" mode, since we always assume
-  // the origin commits are downstream of where we are. Here is the outline:
-  //
-  // first we get the commits we need by exporting the origin tree and
-  // walking upwards until we hit the upstream set defined by origin/master.
-  //
-  // then we simply set the target of o/master to the target of master on
-  // the origin branch
-  var oldCommits = this.exportTree().commits;
-  // HAX HAX omg we will abuse our tree instantiation here :D
-  var originTree = this.origin.exportTree();
-  _.each(originTree.commits, function(commit, id) {
-    // if we have it, no worries
-    if (this.refs[id]) {
-      return;
-    }
-    // go make it!
-    var downloadedCommit = this.getOrMakeRecursive(originTree, this.refs, id);
-    this.commitCollection.add(downloadedCommit);
+GitEngine.prototype.fetch = function(options) {
+  options = options || {};
+  var localBranch = this.refs['o/master'];
+  var remoteBranch = this.origin.refs['master'];
+
+  // first check if this is even allowed by checking the sync between
+  this.checkUpstreamOfSource(
+    this,
+    this.origin,
+    localBranch,
+    remoteBranch
+  );
+
+  // then we get the difference in commits between these two graphs, ordered by
+  // depth
+  var commitsToMake = this.getTargetGraphDifference(
+    this,
+    this.origin,
+    localBranch,
+    remoteBranch
+  );
+
+  var makeCommit = _.bind(function(id, parentIDs) {
+    // need to get the parents first. since we order by depth, we know
+    // the dependencies are there already
+    var parents = _.map(parentIDs, function(parentID) {
+      return this.refs[parentID];
+    }, this);
+    return this.makeCommit(parents, id);
   }, this);
 
-  // since we now might have many commits more than before, lets
-  // check all the ones that didn't use to exist and make animations
-  var newCommits = this.exportTree().commits;
-  var commitsToAnimate = [];
-  _.each(newCommits, function(commit, id) {
-    if (oldCommits[id]) {
-      return;
-    }
-    commitsToAnimate.push(this.refs[id]);
-  }, this);
-
-  // now sort by id...
-  commitsToAnimate.sort(_.bind(this.idSortFunc, this));
-
-  _.each(commitsToAnimate, function(newCommit) {
-    this.animationFactory.genCommitBirthAnimation(
-      this.animationQueue,
+  // now make the promise chain to make each commit
+  var chainStep = _.bind(function(id, parents) {
+    var newCommit = makeCommit(id, parents);
+    return AnimationFactory.playCommitBirthPromiseAnimation(
       newCommit,
       this.gitVisuals
     );
   }, this);
 
-  var originLocation = this.origin.exportTree().branches.master.target;
-  // yay! now we just set o/master and do a simple refresh
-  this.setTargetLocation(this.refs['o/master'], this.refs[originLocation]);
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(commitsToMake, function(commitJSON) {
+    chain = chain.then(_.bind(function() {
+      return AnimationFactory.playHighlightPromiseAnimation(
+        this.origin.refs[commitJSON.id],
+        localBranch
+      );
+    }, this));
+
+    chain = chain.then(function() {
+      return chainStep(
+        commitJSON.id,
+        commitJSON.parents
+      );
+    });
+  }, this);
+
+  chain = chain.then(_.bind(function() {
+    var originLocationID = remoteBranch.get('target').get('id');
+    var localCommit = this.refs[originLocationID];
+    this.setTargetLocation(localBranch, localCommit);
+    // unhighlight origin
+    AnimationFactory.playRefreshAnimation(this.origin.gitVisuals);
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
+
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
+  }
+  return {
+    chain: chain,
+    deferred: deferred
+  };
 };
 
-GitEngine.prototype.originInitStarter = function() {
+GitEngine.prototype.pullStarter = function() {
+  if (!this.hasOrigin()) {
+    throw new GitError({
+      msg: intl.str('git-error-origin-required')
+    });
+  }
+  this.acceptNoGeneralArgs();
+  // eventually args go here
+  this.pull();
+};
+
+GitEngine.prototype.pull = function() {
+  var localBranch = this.refs['master'];
+  var remoteBranch = this.refs['o/master'];
+
+  // no matter what fetch
+  var pendingFetch = this.fetch({
+    dontResolvePromise: true
+  });
+  // then either rebase or merge
+  if (this.commandOptions['--rebase']) {
+    this.pullFinishWithRebase(pendingFetch, localBranch, remoteBranch);
+  } else {
+    this.pullFinishWithMerge(pendingFetch, localBranch, remoteBranch);
+  }
+};
+
+GitEngine.prototype.pullFinishWithRebase = function(
+  pendingFetch,
+  localBranch,
+  remoteBranch
+) {
+  var chain = pendingFetch.chain;
+  var deferred = pendingFetch.deferred;
+
+  // delay a bit after the intense refresh animation from
+  // fetch
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(300);
+  });
+
+  chain = chain.then(_.bind(function() {
+    // highlight last commit on o/master to color of
+    // local branch
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(remoteBranch),
+      localBranch
+    );
+  }, this));
+
+  chain = chain.then(_.bind(function() {
+    pendingFetch.dontResolvePromise = true;
+    return this.rebase(remoteBranch, localBranch, pendingFetch);
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
+};
+
+GitEngine.prototype.pullFinishWithMerge = function(
+  pendingFetch,
+  localBranch,
+  remoteBranch
+) {
+  var chain = pendingFetch.chain;
+  var deferred = pendingFetch.deferred;
+
+  // delay a bit after the intense refresh animation from
+  // fetch
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(300);
+  });
+  
+  chain = chain.then(_.bind(function() {
+    // highlight last commit on o/master to color of
+    // local branch
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(remoteBranch),
+      localBranch
+    );
+  }, this));
+
+  chain = chain.then(_.bind(function() {
+    // highlight commit on master to color of remote
+    return AnimationFactory.playHighlightPromiseAnimation(
+      this.getCommitFromRef(localBranch),
+      remoteBranch
+    );
+  }, this));
+
+  // delay and merge
+  chain = chain.then(function() {
+    return AnimationFactory.getDelayedPromise(700);
+  });
+  chain = chain.then(_.bind(function() {
+    var newCommit = this.merge('o/master');
+    if (!newCommit) {
+      // it is a fast forward
+      return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+    }
+
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
+  }, this));
+
+  this.animationQueue.thenFinish(chain, deferred);
+};
+
+GitEngine.prototype.cloneStarter = function() {
   this.acceptNoGeneralArgs();
   this.makeOrigin(this.printTree(this.exportTreeForBranch('master')));
 };
 
 GitEngine.prototype.fakeTeamworkStarter = function() {
-  this.acceptNoGeneralArgs();
   if (!this.hasOrigin()) {
     throw new GitError({
       msg: intl.str('git-error-origin-required')
     });
   }
 
-  var id = this.getUniqueID();
-  this.origin.receiveTeamwork(id, this.animationQueue);
+  this.validateArgBounds(this.generalArgs, 0, 1);
+  var numToMake = this.generalArgs[0] || 1;
+  this.fakeTeamwork(numToMake);
+};
+
+GitEngine.prototype.fakeTeamwork = function(numToMake) {
+  var makeOriginCommit = _.bind(function() {
+    var id = this.getUniqueID();
+    return this.origin.receiveTeamwork(id, this.animationQueue);
+  }, this);
+
+  var chainStep = _.bind(function() {
+    var newCommit = makeOriginCommit();
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.origin.gitVisuals
+    );
+  }, this);
+  var chainStepWrap = function() { return chainStep(); };
+
+  var deferred = Q.defer();
+  var chain = deferred.promise;
+
+  _.each(_.range(numToMake), function(i) {
+    chain = chain.then(function() {
+      return chainStep();
+    });
+  });
+  this.animationQueue.thenFinish(chain, deferred);
 };
 
 GitEngine.prototype.receiveTeamwork = function(id, animationQueue) {
   var newCommit = this.makeCommit([this.getCommitFromRef('HEAD')], id);
   this.setTargetLocation(this.HEAD, newCommit);
 
-  this.animationFactory.genCommitBirthAnimation(animationQueue, newCommit, this.gitVisuals);
+  return newCommit;
 };
 
-GitEngine.prototype.cherrypick = function(ref) {
-  var commit = this.getCommitFromRef(ref);
-
+GitEngine.prototype.cherrypick = function(commit) {
   // alter the ID slightly
   var id = this.rebaseAltID(commit.get('id'));
 
@@ -23651,7 +24380,12 @@ GitEngine.prototype.commitStarter = function() {
 
     newCommit.set('commitMessage', msg);
   }
-  this.animationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
+
+  var promise = AnimationFactory.playCommitBirthPromiseAnimation(
+    newCommit,
+    this.gitVisuals
+  );
+  this.animationQueue.thenFinish(promise);
 };
 
 GitEngine.prototype.commit = function() {
@@ -23974,20 +24708,10 @@ GitEngine.prototype.rebaseStarter = function() {
   }
 
   this.twoArgsImpliedHead(this.generalArgs);
-
-  var response = this.rebase(this.generalArgs[0], this.generalArgs[1]);
-
-  if (response === undefined) {
-    // was a fastforward or already up to date. returning now
-    // will trigger the refresh animation by not adding anything to
-    // the animation queue
-    return;
-  }
-
-  this.animationFactory.rebaseAnimation(this.animationQueue, response, this, this.gitVisuals);
+  this.rebase(this.generalArgs[0], this.generalArgs[1]);
 };
 
-GitEngine.prototype.rebase = function(targetSource, currentLocation) {
+GitEngine.prototype.rebase = function(targetSource, currentLocation, options) {
   // first some conditions
   if (this.isUpstreamOf(targetSource, currentLocation)) {
     this.command.setResult(intl.str('git-result-uptodate'));
@@ -24011,7 +24735,7 @@ GitEngine.prototype.rebase = function(targetSource, currentLocation) {
     return;
   }
 
-   // now the part of actually rebasing.
+  // now the part of actually rebasing.
   // We need to get the downstream set of targetSource first.
   // then we BFS from currentLocation, using the downstream set as our stopping point.
   // we need to BFS because we need to include all commits below
@@ -24038,7 +24762,7 @@ GitEngine.prototype.rebase = function(targetSource, currentLocation) {
     pQueue = pQueue.concat(popped.get('parents'));
   }
 
-  return this.rebaseFinish(toRebaseRough, stopSet, targetSource, currentLocation);
+  return this.rebaseFinish(toRebaseRough, stopSet, targetSource, currentLocation, options);
 };
 
 GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) {
@@ -24100,9 +24824,7 @@ GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) 
     }
 
     // finish the rebase crap and animate!
-    var animationData = this.rebaseFinish(userSpecifiedRebase, {}, targetSource, currentLocation);
-    this.animationFactory.rebaseAnimation(this.animationQueue, animationData, this, this.gitVisuals);
-    this.animationQueue.start();
+    this.rebaseFinish(userSpecifiedRebase, {}, targetSource, currentLocation);
   }, this))
   .fail(_.bind(function(err) {
     this.filterError(err);
@@ -24119,96 +24841,101 @@ GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation) 
   });
 };
 
-GitEngine.prototype.rebaseFinish = function(toRebaseRough, stopSet, targetSource, currentLocation) {
-  // now we have the all the commits between currentLocation and the set of target to rebase.
-  var animationResponse = {};
-  animationResponse.destinationBranch = this.resolveID(targetSource);
-
-  // we need to throw out merge commits
-  var toRebase = [];
-  _.each(toRebaseRough, function(commit) {
-    if (commit.get('parents').length == 1) {
-      toRebase.push(commit);
-    }
-  });
-
-  // we ALSO need to throw out commits that will do the same changes. like
-  // if the upstream set has a commit C4 and we have C4', we dont rebase the C4' again.
-  // get this by doing ID scraping
+GitEngine.prototype.filterRebaseCommits = function(toRebaseRough, stopSet) {
   var changesAlreadyMade = {};
   _.each(stopSet, function(val, key) {
-    changesAlreadyMade[this.scrapeBaseID(key)] = val; // val == true
+    changesAlreadyMade[this.scrapeBaseID(key)] = true;
   }, this);
-
-  // now get rid of the commits that will redo same changes
-  toRebaseRough = toRebase;
-  toRebase = [];
-  _.each(toRebaseRough, function(commit) {
-    var baseID = this.scrapeBaseID(commit.get('id'));
-    if (!changesAlreadyMade[baseID]) {
-      toRebase.push(commit);
-    }
-  }, this);
-
-  toRebaseRough = toRebase;
-  toRebase = [];
-  // finally, make the set unique
   var uniqueIDs = {};
-  _.each(toRebaseRough, function(commit) {
-    if (uniqueIDs[commit.get('id')]) { return; }
+
+  // resolve the commits we will rebase
+  return _.filter(toRebaseRough, function(commit) {
+    // no merge commits
+    if (commit.get('parents').length !== 1) {
+      return false;
+    }
+
+    // we ALSO need to throw out commits that will do the same changes. like
+    // if the upstream set has a commit C4 and we have C4', we dont rebase the C4' again.
+    var baseID = this.scrapeBaseID(commit.get('id'));
+    if (changesAlreadyMade[baseID]) {
+      return false;
+    }
+
+    // make unique
+    if (uniqueIDs[commit.get('id')]) {
+      return false;
+    }
 
     uniqueIDs[commit.get('id')] = true;
-    toRebase.push(commit);
+    return true;
   }, this);
+};
 
+GitEngine.prototype.rebaseFinish = function(
+  toRebaseRough,
+  stopSet,
+  targetSource,
+  currentLocation,
+  options
+) {
+  options = options || {};
+  // now we have the all the commits between currentLocation and the set of target to rebase.
+  var destinationBranch = this.resolveID(targetSource);
+  var deferred = options.deferred || Q.defer();
+  var chain = options.chain || deferred.promise;
+
+  var toRebase = this.filterRebaseCommits(toRebaseRough, stopSet);
   if (!toRebase.length) {
     throw new GitError({
       msg: intl.str('git-error-rebase-none')
     });
   }
 
-  animationResponse.toRebaseArray = toRebase.slice(0);
+  chain = AnimationFactory.highlightEachWithPromise(
+    chain,
+    toRebase,
+    destinationBranch
+  );
 
   // now pop all of these commits onto targetLocation
   var base = this.getCommitFromRef(targetSource);
-
-  // do the rebase, and also maintain all our animation info during this
-  animationResponse.rebaseSteps = [];
-  var beforeSnapshot = this.gitVisuals.genSnapshot();
-  var afterSnapshot;
-  _.each(toRebase, function(old) {
-    var newId = this.rebaseAltID(old.get('id'));
-
+  // each step makes a new commit
+  var chainStep = _.bind(function(oldCommit) {
+    var newId = this.rebaseAltID(oldCommit.get('id'));
     var newCommit = this.makeCommit([base], newId);
     base = newCommit;
 
-    // animation info
-    afterSnapshot = this.gitVisuals.genSnapshot();
-    animationResponse.rebaseSteps.push({
-      oldCommit: old,
-      newCommit: newCommit,
-      beforeSnapshot: beforeSnapshot,
-      afterSnapshot: afterSnapshot
-    });
-    beforeSnapshot = afterSnapshot;
+    return AnimationFactory.playCommitBirthPromiseAnimation(
+      newCommit,
+      this.gitVisuals
+    );
   }, this);
 
-  if (this.resolveID(currentLocation).get('type') == 'commit') {
-    // we referenced a commit like git rebase C2 C1, so we have
-    // to manually check out C1'
+  // set up the promise chain
+  _.each(toRebase, function(commit) {
+    chain = chain.then(function() {
+      return chainStep(commit);
+    });
+  }, this);
 
-    var steps = animationResponse.rebaseSteps;
-    var newestCommit = steps[steps.length - 1].newCommit;
+  chain = chain.then(_.bind(function() {
+    if (this.resolveID(currentLocation).get('type') == 'commit') {
+      // we referenced a commit like git rebase C2 C1, so we have
+      // to manually check out C1'
+      this.checkout(base);
+    } else {
+      // now we just need to update the rebased branch is
+      this.setTargetLocation(currentLocation, base);
+      this.checkout(currentLocation);
+    }
+    return AnimationFactory.playRefreshAnimation(this.gitVisuals);
+  }, this));
 
-    this.checkout(newestCommit);
-  } else {
-    // now we just need to update the rebased branch is
-    this.setTargetLocation(currentLocation, base);
-    this.checkout(currentLocation);
+  if (!options.dontResolvePromise) {
+    this.animationQueue.thenFinish(chain, deferred);
   }
-
-  // for animation
-  return animationResponse;
+  return chain;
 };
 
 GitEngine.prototype.mergeStarter = function() {
@@ -24218,11 +24945,11 @@ GitEngine.prototype.mergeStarter = function() {
 
   if (newCommit === undefined) {
     // its just a fast forwrard
-    this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+    AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
     return;
   }
 
-  this.animationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
+  AnimationFactory.genCommitBirthAnimation(this.animationQueue, newCommit, this.gitVisuals);
 };
 
 GitEngine.prototype.merge = function(targetSource) {
@@ -24369,7 +25096,15 @@ GitEngine.prototype.branchStarter = function() {
 
 
   if (this.generalArgs.length === 0) {
-    this.printBranches(this.getBranches());
+    var branches;
+    if (this.commandOptions['-a']) {
+      branches = this.getBranches();
+    } else if (this.commandOptions['-r']) {
+      branches = this.getRemoteBranches();
+    } else {
+      branches = this.getLocalBranches();
+    }
+    this.printBranches(branches);
     return;
   }
 
@@ -24378,12 +25113,19 @@ GitEngine.prototype.branchStarter = function() {
 };
 
 GitEngine.prototype.forceBranch = function(branchName, where) {
+  branchName = this.crappyUnescape(branchName);
   // if branchname doesn't exist...
   if (!this.refs[branchName]) {
     this.branch(branchName, where);
   }
 
   var branch = this.resolveID(branchName);
+  if (branch.getIsRemote()) {
+    throw new GitError({
+      msg: intl.str('git-error-remote-branch')
+    });
+  }
+
   if (branch.get('type') !== 'branch') {
     throw new GitError({
       msg: intl.str('git-error-options')
@@ -24407,7 +25149,6 @@ GitEngine.prototype.deleteBranch = function(name) {
   if (target.get('type') !== 'branch' ||
       target.get('id') == 'master' ||
       this.HEAD.get('target') === target) {
-
     throw new GitError({
       msg: intl.str('git-error-branch')
     });
@@ -24415,6 +25156,12 @@ GitEngine.prototype.deleteBranch = function(name) {
 
   // now we know it's a branch
   var branch = target;
+  // if its remote
+  if (target.getIsRemote()) {
+    throw new GitError({
+      msg: intl.str('git-error-remote-branch')
+    });
+  }
 
   this.branchCollection.remove(branch);
   this.refs[branch.get('id')] = undefined;
@@ -24442,7 +25189,7 @@ GitEngine.prototype.externalRefresh = function() {
   this.animationQueue = new AnimationQueue({
     callback: function() {}
   });
-  this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
   this.animationQueue.start();
 };
 
@@ -24472,13 +25219,16 @@ GitEngine.prototype.dispatch = function(command, deferred) {
     return;
   }
 
+  var willStartAuto = this.animationQueue.get('defer') ||
+    this.animationQueue.get('promiseBased');
+
   // only add the refresh if we didn't do manual animations
-  if (!this.animationQueue.get('animations').length && !this.animationQueue.get('defer')) {
-    this.animationFactory.refreshTree(this.animationQueue, this.gitVisuals);
+  if (!this.animationQueue.get('animations').length && !willStartAuto) {
+    AnimationFactory.refreshTree(this.animationQueue, this.gitVisuals);
   }
 
   // animation queue will call the callback when its done
-  if (!this.animationQueue.get('defer')) {
+  if (!willStartAuto) {
     this.animationQueue.start();
   }
 };
@@ -24802,18 +25552,43 @@ require("/src/js/git/index.js");
 require.define("/src/js/git/treeCompare.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 
 // static class...
-function TreeCompare() {
+var TreeCompare = {};
 
-}
+TreeCompare.dispatchFromLevel = function(levelBlob, treeToCompare) {
+  var goalTreeString = levelBlob.goalTreeString;
+  return TreeCompare.dispatch(levelBlob, goalTreeString, treeToCompare);
+};
 
-TreeCompare.prototype.compareAllBranchesWithinTreesAndHEAD = function(treeA, treeB) {
+TreeCompare.dispatch = function(levelBlob, goalTreeString, treeToCompare) {
+  var getAroundLintTrue = true;
+  // i actually prefer this to else if
+  switch (getAroundLintTrue) {
+    case !!levelBlob.compareOnlyMaster:
+      return TreeCompare.compareBranchWithinTrees(treeToCompare, goalTreeString, 'master');
+    case !!levelBlob.compareOnlyBranches:
+      return TreeCompare.compareAllBranchesWithinTrees(treeToCompare, goalTreeString);
+    case !!levelBlob.compareAllBranchesHashAgnostic:
+      return TreeCompare.compareAllBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString);
+    case !!levelBlob.compareOnlyMasterHashAgnostic:
+      return TreeCompare.compareBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString, ['master']);
+    case !!levelBlob.compareOnlyMasterHashAgnosticWithAsserts:
+      return TreeCompare.compareBranchesWithinTreesHashAgnostic(treeToCompare, goalTreeString, ['master']) &&
+        TreeCompare.evalAsserts(treeToCompare, levelBlob.goalAsserts);
+    default:
+      return TreeCompare.compareAllBranchesWithinTreesAndHEAD(treeToCompare, goalTreeString);
+  }
+};
+
+// would love to have copy properties here.. :(
+TreeCompare.compareAllBranchesWithinTreesAndHEAD = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
+  debugger;
 
   return treeA.HEAD.target == treeB.HEAD.target && this.compareAllBranchesWithinTrees(treeA, treeB);
 };
 
-TreeCompare.prototype.compareAllBranchesWithinTrees = function(treeA, treeB) {
+TreeCompare.compareAllBranchesWithinTrees = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
 
@@ -24830,7 +25605,7 @@ TreeCompare.prototype.compareAllBranchesWithinTrees = function(treeA, treeB) {
   return result;
 };
 
-TreeCompare.prototype.compareBranchesWithinTrees = function(treeA, treeB, branches) {
+TreeCompare.compareBranchesWithinTrees = function(treeA, treeB, branches) {
   var result = true;
   _.each(branches, function(branchName) {
     result = result && this.compareBranchWithinTrees(treeA, treeB, branchName);
@@ -24839,7 +25614,7 @@ TreeCompare.prototype.compareBranchesWithinTrees = function(treeA, treeB, branch
   return result;
 };
 
-TreeCompare.prototype.compareBranchWithinTrees = function(treeA, treeB, branchName) {
+TreeCompare.compareBranchWithinTrees = function(treeA, treeB, branchName) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
   this.reduceTreeFields([treeA, treeB]);
@@ -24852,7 +25627,7 @@ TreeCompare.prototype.compareBranchWithinTrees = function(treeA, treeB, branchNa
     recurseCompare(treeA.commits[branchA.target], treeB.commits[branchB.target]);
 };
 
-TreeCompare.prototype.compareAllBranchesWithinTreesHashAgnostic = function(treeA, treeB) {
+TreeCompare.compareAllBranchesWithinTreesHashAgnostic = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
   this.reduceTreeFields([treeA, treeB]);
@@ -24868,7 +25643,7 @@ TreeCompare.prototype.compareAllBranchesWithinTreesHashAgnostic = function(treeA
   return this.compareBranchesWithinTreesHashAgnostic(treeA, treeB, branchNames);
 };
 
-TreeCompare.prototype.compareBranchesWithinTreesHashAgnostic = function(treeA, treeB, branches) {
+TreeCompare.compareBranchesWithinTreesHashAgnostic = function(treeA, treeB, branches) {
   // we can't DRY unfortunately here because we need a special _.isEqual function
   // for both the recursive compare and the branch compare
   treeA = this.convertTreeSafe(treeA);
@@ -24903,17 +25678,15 @@ TreeCompare.prototype.compareBranchesWithinTreesHashAgnostic = function(treeA, t
   return result;
 };
 
-TreeCompare.prototype.evalAsserts = function(tree, assertsPerBranch) {
+TreeCompare.evalAsserts = function(tree, assertsPerBranch) {
   var result = true;
   _.each(assertsPerBranch, function(asserts, branchName) {
     result = result && this.evalAssertsOnBranch(tree, branchName, asserts);
   }, this);
-
-  console.log('EVAL ASSETS was', result);
   return result;
 };
 
-TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) {
+TreeCompare.evalAssertsOnBranch = function(tree, branchName, asserts) {
   tree = this.convertTreeSafe(tree);
 
   // here is the outline:
@@ -24921,7 +25694,6 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   // * go to the branch given by the key
   // * traverse upwards, storing the amount of hashes on each in the data object
   // * then come back and perform functions on data
-  console.log('doing asserts on', branchName);
 
   if (!tree.branches[branchName]) {
     return false;
@@ -24932,19 +25704,17 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   var data = {};
   while (queue.length) {
     var commitRef = queue.pop();
-    console.log(commitRef);
     data[this.getBaseRef(commitRef)] = this.getNumHashes(commitRef);
-
     queue = queue.concat(tree.commits[commitRef].parents);
   }
 
-  console.log('data is', data);
   var result = true;
   _.each(asserts, function(assert) {
     try {
       result = result && assert(data);
     } catch (err) {
-      console.err(err);
+      console.warn('error during assert', err);
+      console.log(err);
       result = false;
     }
   });
@@ -24952,7 +25722,7 @@ TreeCompare.prototype.evalAssertsOnBranch = function(tree, branchName, asserts) 
   return result;
 };
 
-TreeCompare.prototype.getNumHashes = function(ref) {
+TreeCompare.getNumHashes = function(ref) {
   var regexMap = [
     [/^C(\d+)([']{0,3})$/, function(bits) {
       if (!bits[2]) {
@@ -24976,7 +25746,7 @@ TreeCompare.prototype.getNumHashes = function(ref) {
   throw new Error('coudlnt parse ref ' + ref);
 };
 
-TreeCompare.prototype.getBaseRef = function(ref) {
+TreeCompare.getBaseRef = function(ref) {
   var idRegex = /^C(\d+)/;
   var bits = idRegex.exec(ref);
   if (!bits) { throw new Error('no regex matchy for ' + ref); }
@@ -24985,7 +25755,7 @@ TreeCompare.prototype.getBaseRef = function(ref) {
   return 'C' + bits[1];
 };
 
-TreeCompare.prototype.getRecurseCompareHashAgnostic = function(treeA, treeB) {
+TreeCompare.getRecurseCompareHashAgnostic = function(treeA, treeB) {
   // here we pass in a special comparison function to pass into the base
   // recursive compare.
 
@@ -25011,7 +25781,7 @@ TreeCompare.prototype.getRecurseCompareHashAgnostic = function(treeA, treeB) {
   return this.getRecurseCompare(treeA, treeB, {isEqual: isEqual});
 };
 
-TreeCompare.prototype.getRecurseCompare = function(treeA, treeB, options) {
+TreeCompare.getRecurseCompare = function(treeA, treeB, options) {
   options = options || {};
 
   // we need a recursive comparison function to bubble up the branch
@@ -25044,14 +25814,14 @@ TreeCompare.prototype.getRecurseCompare = function(treeA, treeB, options) {
   return recurseCompare;
 };
 
-TreeCompare.prototype.convertTreeSafe = function(tree) {
+TreeCompare.convertTreeSafe = function(tree) {
   if (typeof tree == 'string') {
     return JSON.parse(unescape(tree));
   }
   return tree;
 };
 
-TreeCompare.prototype.reduceTreeFields = function(trees) {
+TreeCompare.reduceTreeFields = function(trees) {
   var commitSaveFields = [
     'parents',
     'id',
@@ -25097,7 +25867,7 @@ TreeCompare.prototype.reduceTreeFields = function(trees) {
   });
 };
 
-TreeCompare.prototype.compareTrees = function(treeA, treeB) {
+TreeCompare.compareTrees = function(treeA, treeB) {
   treeA = this.convertTreeSafe(treeA);
   treeB = this.convertTreeSafe(treeB);
 
@@ -25330,6 +26100,22 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
       'shoutout to your school / city / whatever!',
     'en_US': 'Quick commit. Go Bears!',
     'zh_CN': '快速提交。上啊月熊！'
+  },
+  'git-error-origin-fetch-uptodate': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Already up to date!'
+  },
+  'git-error-origin-fetch-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'Your origin branch is out of sync with the remote branch and fetch cannot be performed. try using --force'
+  },
+  'git-error-origin-push-no-ff': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'The remote repository has diverged from your local repository, so uploading your changes is not a simple fast forward (and thus your push was rejected). Please pull down the new changes in the remote repository, incorporate them into this branch, and try again. You can do so with git pull or git pull --rebase'
+  },
+  'git-error-remote-branch': {
+    '__desc__': 'One of the error messages for git',
+    'en_US': 'You cannot execute that command on a remote branch'
   },
   'git-error-origin-required': {
     '__desc__': 'One of the error messages for git',
@@ -25656,7 +26442,7 @@ require.define("/src/js/intl/strings.js",function(require,module,exports,__dirna
   ///////////////////////////////////////////////////////////////////////////
   'help-vague-level': {
     '__desc__': 'When you are in a level and you say help, its vague and you need to specify',
-    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" or "help general"',
+    'en_US': 'You are in a level, so multiple forms of help are available. Please select either "help level" to learn more about this lesson, "help general" for using Learn GitBranching, or "objective" to learn about how to solve the level.',
     'zh_CN': '您正在关卡中，这里有多种形式的帮助，请选择 "help level" (关卡帮助)或 "help general" (一般帮助)'
   },
   ///////////////////////////////////////////////////////////////////////////
@@ -26354,8 +27140,6 @@ var Level = Sandbox.extend({
     this.commandsThatCount = this.getCommandsThatCount();
     this.solved = false;
 
-    this.treeCompare = new TreeCompare();
-
     this.initGoalData(options);
     this.initName(options);
 
@@ -26397,9 +27181,11 @@ var Level = Sandbox.extend({
       return;
     }
 
-    var dialog = _.clone(intl.getStartDialog(levelObj));
+    debugger;
+    console.log(intl.getStartDialog(levelObj));
+    var dialog = $.extend({}, intl.getStartDialog(levelObj));
     // grab the last slide only
-    dialog.childViews = dialog.childViews.splice(-1);
+    dialog.childViews = dialog.childViews.slice(-1);
     new MultiView(_.extend(
       dialog,
       { deferred: deferred }
@@ -26647,28 +27433,8 @@ var Level = Sandbox.extend({
       return;
     }
 
-    // TODO refactor this ugly ass switch statement...
-    // BIG TODO REALLY REFACTOR HAX HAX
-    // ok so lets see if they solved it...
     var current = this.mainVis.gitEngine.exportTree();
-    var solved;
-    if (this.level.compareOnlyMaster) {
-      solved = this.treeCompare.compareBranchWithinTrees(current, this.level.goalTreeString, 'master');
-    } else if (this.level.compareOnlyBranches) {
-      solved = this.treeCompare.compareAllBranchesWithinTrees(current, this.level.goalTreeString);
-    } else if (this.level.compareAllBranchesHashAgnostic) {
-      solved = this.treeCompare.compareAllBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString);
-    } else if (this.level.compareOnlyMasterHashAgnostic) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-    } else if (this.level.compareOnlyMasterHashAgnosticWithAsserts) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-      solved = solved && this.treeCompare.evalAsserts(
-        current,
-        this.level.goalAsserts
-      );
-    } else {
-      solved = this.treeCompare.compareAllBranchesWithinTreesAndHEAD(current, this.level.goalTreeString);
-    }
+    var solved = TreeCompare.dispatchFromLevel(this.level, current);
 
     if (!solved) {
       defer.resolve();
@@ -27986,7 +28752,9 @@ var toGlobalize = {
 };
 
 _.each(toGlobalize, function(module) {
-  _.extend(window, module);
+  for (var key in module) {
+    window['debug_' + key] = module[key];
+  }
 });
 
 $(document).ready(function() {
@@ -27995,6 +28763,10 @@ $(document).ready(function() {
   window.sandbox = toGlobalize.Main.getSandbox();
   window.modules = toGlobalize;
   window.levelDropdown = toGlobalize.Main.getLevelDropdown();
+  window.under = _;
+  window.copyTree = function() {
+    return toGlobalize.Main.getSandbox().mainVis.gitEngine.printAndCopyTree();
+  };
 });
 
 
@@ -29504,6 +30276,10 @@ var PositiveNegativeBase = BaseView.extend({
     this.navEvents.trigger('positive');
   },
 
+  exit: function() {
+    this.navEvents.trigger('exit');
+  },
+
   negative: function() {
     this.navEvents.trigger('negative');
   }
@@ -29602,7 +30378,13 @@ var LeftRightView = PositiveNegativeBase.extend({
   template: _.template($('#left-right-template').html()),
   events: {
     'click .left': 'negative',
+    'click .exit': 'exit',
     'click .right': 'positive'
+  },
+
+  exit: function() {
+    this.pipeEvents.trigger('exit');
+    LeftRightView.__super__.exit.apply(this);
   },
 
   positive: function() {
@@ -30159,6 +30941,9 @@ var CommandsHelperBar = HelperBar.extend({
       text: 'Undo',
       id: 'undo'
     }, {
+      text: 'Objective',
+      id: 'objectve'
+    }, {
       text: 'Help',
       id: 'help'
     }, {
@@ -30170,6 +30955,10 @@ var CommandsHelperBar = HelperBar.extend({
   fireCommand: function() {
     log.viewInteracted('helperBar');
     HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
+  onObjectiveClick: function() {
+    this.fireCommand('objective');
   },
 
   onLevelsClick: function() {
@@ -30690,6 +31479,7 @@ var MultiView = Backbone.View.extend({
     this.navEvents.on('negative', this.getNegFunc(), this);
     this.navEvents.on('positive', this.getPosFunc(), this);
     this.navEvents.on('quit', this.finish, this);
+    this.navEvents.on('exit', this.finish, this);
 
     this.keyboardListener = new KeyboardListener({
       events: this.navEvents,
@@ -30999,8 +31789,10 @@ require("/src/js/views/rebaseView.js");
 
 require.define("/src/js/visuals/animation/animationFactory.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
 var Backbone = require('backbone');
+var Q = require('q');
 
 var Animation = require('./index').Animation;
+var PromiseAnimation = require('./index').PromiseAnimation;
 var GRAPHICS = require('../../util/constants').GRAPHICS;
 
 /******************
@@ -31013,24 +31805,15 @@ var GRAPHICS = require('../../util/constants').GRAPHICS;
  * and then essentially animate the entire tree too.
  */
 
-// essentially a static class
-var AnimationFactory = function() {
+// static class
+var AnimationFactory = {};
 
-};
-
-AnimationFactory.prototype.genCommitBirthAnimation = function(animationQueue, commit, gitVisuals) {
-  if (!animationQueue) {
-    throw new Error("Need animation queue to add closure to!");
-  }
-
+var makeCommitBirthAnimation = function(gitVisuals, visNode) {
   var time = GRAPHICS.defaultAnimationTime * 1.0;
   var bounceTime = time * 2;
 
-  // essentially refresh the entire tree, but do a special thing for the commit
-  var visNode = commit.get('visNode');
-
   var animation = function() {
-    // this takes care of refs and all that jazz, and updates all the positions
+    // essentially refresh the entire tree, but do a special thing for the commit
     gitVisuals.refreshTree(time);
 
     visNode.setBirth();
@@ -31040,61 +31823,86 @@ AnimationFactory.prototype.genCommitBirthAnimation = function(animationQueue, co
     visNode.animateUpdatedPosition(bounceTime, 'bounce');
     visNode.animateOutgoingEdges(time);
   };
+  return {
+    animation: animation,
+    duration: Math.max(time, bounceTime)
+  };
+};
+
+var makeHighlightAnimation = function(visNode, visBranch) {
+  var fullTime = GRAPHICS.defaultAnimationTime * 0.66;
+  var slowTime = fullTime * 2.0;
+
+  return {
+    animation: function() {
+      visNode.highlightTo(visBranch, slowTime, 'easeInOut');
+    },
+    duration: slowTime * 1.5
+  };
+};
+
+AnimationFactory.genCommitBirthAnimation = function(animationQueue, commit, gitVisuals) {
+  if (!animationQueue) {
+    throw new Error("Need animation queue to add closure to!");
+  }
+
+  var visNode = commit.get('visNode');
+  var anPack = makeCommitBirthAnimation(gitVisuals, visNode);
 
   animationQueue.add(new Animation({
-    closure: animation,
-    duration: Math.max(time, bounceTime)
+    closure: anPack.animation,
+    duration: anPack.duration
   }));
 };
 
-AnimationFactory.prototype.overrideOpacityDepth2 = function(attr, opacity) {
-  opacity = (opacity === undefined) ? 1 : opacity;
-
-  var newAttr = {};
-
-  _.each(attr, function(partObj, partName) {
-    newAttr[partName] = {};
-    _.each(partObj, function(val, key) {
-      if (key == 'opacity') {
-        newAttr[partName][key] = opacity;
-      } else {
-        newAttr[partName][key] = val;
-      }
-    });
-  });
-  return newAttr;
+AnimationFactory.genCommitBirthPromiseAnimation = function(commit, gitVisuals) {
+  var visNode = commit.get('visNode');
+  return new PromiseAnimation(makeCommitBirthAnimation(gitVisuals, visNode));
 };
 
-AnimationFactory.prototype.overrideOpacityDepth3 = function(snapShot, opacity) {
-  var newSnap = {};
-
-  _.each(snapShot, function(visObj, visID) {
-    newSnap[visID] = this.overrideOpacityDepth2(visObj, opacity);
+AnimationFactory.highlightEachWithPromise = function(
+  chain,
+  toHighlight,
+  destObj
+) {
+  _.each(toHighlight, function(commit) {
+    chain = chain.then(_.bind(function() {
+      return this.playHighlightPromiseAnimation(
+        commit,
+        destObj
+      );
+    }, this));
   }, this);
-  return newSnap;
+  return chain;
 };
 
-AnimationFactory.prototype.genCommitBirthClosureFromSnapshot = function(step, gitVisuals) {
-  var time = GRAPHICS.defaultAnimationTime * 1.0;
-  var bounceTime = time * 1.5;
-
-  var visNode = step.newCommit.get('visNode');
-  var afterAttrWithOpacity = this.overrideOpacityDepth2(step.afterSnapshot[visNode.getID()]);
-  var afterSnapWithOpacity = this.overrideOpacityDepth3(step.afterSnapshot);
-
-  var animation = function() {
-    visNode.setBirthFromSnapshot(step.beforeSnapshot);
-    visNode.parentInFront();
-    gitVisuals.visBranchesFront();
-
-    visNode.animateToAttr(afterAttrWithOpacity, bounceTime, 'bounce');
-    visNode.animateOutgoingEdgesToAttr(afterSnapWithOpacity, bounceTime);
-  };
-
-  return animation;
+AnimationFactory.playCommitBirthPromiseAnimation = function(commit, gitVisuals) {
+  var animation = this.genCommitBirthPromiseAnimation(commit, gitVisuals);
+  animation.play();
+  return animation.getPromise();
 };
 
-AnimationFactory.prototype.refreshTree = function(animationQueue, gitVisuals) {
+AnimationFactory.playRefreshAnimationAndFinish = function(gitVisuals, animationQueue) {
+  var animation = new PromiseAnimation({
+    closure: function() {
+      gitVisuals.refreshTree();
+    }
+  });
+  animation.play();
+  animationQueue.thenFinish(animation.getPromise());
+};
+
+AnimationFactory.playRefreshAnimation = function(gitVisuals) {
+  var animation = new PromiseAnimation({
+    closure: function() {
+      gitVisuals.refreshTree();
+    }
+  });
+  animation.play();
+  return animation.getPromise();
+};
+
+AnimationFactory.refreshTree = function(animationQueue, gitVisuals) {
   animationQueue.add(new Animation({
     closure: function() {
       gitVisuals.refreshTree();
@@ -31102,156 +31910,31 @@ AnimationFactory.prototype.refreshTree = function(animationQueue, gitVisuals) {
   }));
 };
 
-AnimationFactory.prototype.rebaseAnimation = function(animationQueue, rebaseResponse,
-                                                      gitEngine, gitVisuals) {
-
-  this.rebaseHighlightPart(animationQueue, rebaseResponse, gitEngine);
-  this.rebaseBirthPart(animationQueue, rebaseResponse, gitEngine, gitVisuals);
+AnimationFactory.genHighlightPromiseAnimation = function(commit, destObj) {
+  // could be branch or node
+  var visObj = destObj.get('visBranch') || destObj.get('visNode');
+  var visNode = commit.get('visNode');
+  return new PromiseAnimation(makeHighlightAnimation(visNode, visObj));
 };
 
-AnimationFactory.prototype.rebaseHighlightPart = function(animationQueue, rebaseResponse, gitEngine) {
-  var fullTime = GRAPHICS.defaultAnimationTime * 0.66;
-  var slowTime = fullTime * 2.0;
-
-  // we want to highlight all the old commits
-  var oldCommits = rebaseResponse.toRebaseArray;
-  // we are either highlighting to a visBranch or a visNode
-  var visBranch = rebaseResponse.destinationBranch.get('visBranch');
-  if (!visBranch) {
-    // in the case where we rebase onto a commit
-    visBranch = rebaseResponse.destinationBranch.get('visNode');
-  }
-
-  _.each(oldCommits, function(oldCommit) {
-    var visNode = oldCommit.get('visNode');
-    animationQueue.add(new Animation({
-      closure: function() {
-        visNode.highlightTo(visBranch, slowTime, 'easeInOut');
-      },
-      duration: fullTime * 1.5
-    }));
-
-  }, this);
-
-  this.delay(animationQueue, fullTime * 2);
+AnimationFactory.playHighlightPromiseAnimation = function(commit, destObj) {
+  var animation = this.genHighlightPromiseAnimation(commit, destObj);
+  animation.play();
+  return animation.getPromise();
 };
 
-AnimationFactory.prototype.rebaseBirthPart = function(animationQueue, rebaseResponse,
-                                                      gitEngine, gitVisuals) {
-  var rebaseSteps = rebaseResponse.rebaseSteps;
-
-  var newVisNodes = [];
-  _.each(rebaseSteps, function(step) {
-    var visNode = step.newCommit.get('visNode');
-
-    newVisNodes.push(visNode);
-    visNode.setOpacity(0);
-    visNode.setOutgoingEdgesOpacity(0);
-  }, this);
-
-  var previousVisNodes = [];
-  _.each(rebaseSteps, function(rebaseStep, index) {
-    var toOmit = newVisNodes.slice(index + 1);
-
-    var snapshotPart = this.genFromToSnapshotAnimation(
-      rebaseStep.beforeSnapshot,
-      rebaseStep.afterSnapshot,
-      toOmit,
-      previousVisNodes,
-      gitVisuals
-    );
-    var birthPart = this.genCommitBirthClosureFromSnapshot(rebaseStep, gitVisuals);
-
-    var animation = function() {
-      snapshotPart();
-      birthPart();
-    };
-
-    animationQueue.add(new Animation({
-      closure: animation,
-      duration: GRAPHICS.defaultAnimationTime * 1.5
-    }));
-
-    previousVisNodes.push(rebaseStep.newCommit.get('visNode'));
-  }, this);
-
-  // need to delay to let bouncing finish
-  this.delay(animationQueue);
-
-  this.refreshTree(animationQueue, gitVisuals);
+AnimationFactory.getDelayedPromise = function(amount) {
+  var deferred = Q.defer();
+  setTimeout(deferred.resolve, amount || 1000);
+  return deferred.promise;
 };
 
-AnimationFactory.prototype.delay = function(animationQueue, time) {
+AnimationFactory.delay = function(animationQueue, time) {
   time = time || GRAPHICS.defaultAnimationTime;
   animationQueue.add(new Animation({
     closure: function() { },
     duration: time
   }));
-};
-
-AnimationFactory.prototype.genSetAllCommitOpacities = function(visNodes, opacity) {
-  // need to slice for closure
-  var nodesToAnimate = visNodes.slice(0);
-
-  return function() {
-    _.each(nodesToAnimate, function(visNode) {
-      visNode.setOpacity(opacity);
-      visNode.setOutgoingEdgesOpacity(opacity);
-    });
-  };
-};
-
-AnimationFactory.prototype.stripObjectsFromSnapshot = function(snapShot, toOmit) {
-  var ids = [];
-  _.each(toOmit, function(obj) {
-    ids.push(obj.getID());
-  });
-
-  var newSnapshot = {};
-  _.each(snapShot, function(val, key) {
-    if (_.include(ids, key)) {
-      // omit
-      return;
-    }
-    newSnapshot[key] = val;
-  }, this);
-  return newSnapshot;
-};
-
-AnimationFactory.prototype.genFromToSnapshotAnimation = function(
-  beforeSnapshot,
-  afterSnapshot,
-  commitsToOmit,
-  commitsToFixOpacity,
-  gitVisuals) {
-
-  // we want to omit the commit outgoing edges
-  var toOmit = [];
-  _.each(commitsToOmit, function(visNode) {
-    toOmit.push(visNode);
-    toOmit = toOmit.concat(visNode.get('outgoingEdges'));
-  });
-
-  var fixOpacity = function(obj) {
-    if (!obj) { return; }
-    _.each(obj, function(attr, partName) {
-      obj[partName].opacity = 1;
-    });
-  };
-
-  // HORRIBLE loop to fix opacities all throughout the snapshot
-  _.each([beforeSnapshot, afterSnapshot], function(snapShot) {
-    _.each(commitsToFixOpacity, function(visNode) {
-      fixOpacity(snapShot[visNode.getID()]);
-      _.each(visNode.get('outgoingEdges'), function(visEdge) {
-        fixOpacity(snapShot[visEdge.getID()]);
-      });
-    });
-  });
-
-  return function() {
-    gitVisuals.animateAllFromAttrToAttr(beforeSnapshot, afterSnapshot, toOmit);
-  };
 };
 
 exports.AnimationFactory = AnimationFactory;
@@ -31261,6 +31944,7 @@ exports.AnimationFactory = AnimationFactory;
 require("/src/js/visuals/animation/animationFactory.js");
 
 require.define("/src/js/visuals/animation/index.js",function(require,module,exports,__dirname,__filename,process,global){var _ = require('underscore');
+var Q = require('q');
 var Backbone = require('backbone');
 var GLOBAL = require('../../util/constants').GLOBAL;
 
@@ -31290,13 +31974,24 @@ var AnimationQueue = Backbone.Model.extend({
     animations: null,
     index: 0,
     callback: null,
-    defer: false
+    defer: false,
+    promiseBased: false
   },
 
   initialize: function(options) {
     this.set('animations', []);
     if (!options.callback) {
       console.warn('no callback');
+    }
+  },
+
+  thenFinish: function(promise, deferred) {
+    promise.then(_.bind(function() {
+      this.finish();
+    }, this));
+    this.set('promiseBased', true);
+    if (deferred) {
+      deferred.resolve();
     }
   },
 
@@ -31326,6 +32021,7 @@ var AnimationQueue = Backbone.Model.extend({
     // ok so call the first animation, and then set a timeout to call the next.
     // since an animation is defined as taking a specific amount of time,
     // we can simply just use timeouts rather than promises / deferreds.
+
     // for graphical displays that require an unknown amount of time, use deferreds
     // but not animation queue (see the finishAnimation for that)
     var animations = this.get('animations');
@@ -31347,7 +32043,48 @@ var AnimationQueue = Backbone.Model.extend({
   }
 });
 
+var PromiseAnimation = Backbone.Model.extend({
+  defaults: {
+    deferred: null,
+    closure: null,
+    duration: 300
+  },
+
+  initialize: function(options) {
+    if (!options.closure && !options.animation) {
+      throw new Error('need closure or animation');
+    }
+    this.set('closure', options.closure || options.animation);
+    this.set('deferred', options.deferred || Q.defer());
+  },
+
+  getPromise: function() {
+    return this.get('deferred').promise;
+  },
+
+  play: function() {
+    // a single animation is just something with a timeout, but now
+    // we want to resolve a deferred when the animation finishes
+    this.get('closure')();
+    setTimeout(_.bind(function() {
+      this.get('deferred').resolve();
+    }, this), this.get('duration'));
+  },
+
+  then: function(func) {
+    return this.get('deferred').promise.then(func);
+  }
+});
+
+PromiseAnimation.fromAnimation = function(animation) {
+  return new PromiseAnimation({
+    closure: animation.get('closure'),
+    duration: animation.get('duration')
+  });
+};
+
 exports.Animation = Animation;
+exports.PromiseAnimation = PromiseAnimation;
 exports.AnimationQueue = AnimationQueue;
 
 });
@@ -32404,6 +33141,7 @@ var VisBranch = VisBase.extend({
       // switch to a head ref
       this.set('isHead', true);
       this.set('flip', -1);
+      this.refreshOffset();
 
       this.set('fill', GRAPHICS.headRectFill);
     } else if (id !== 'master') {
@@ -32416,11 +33154,12 @@ var VisBranch = VisBase.extend({
     var commit = this.gitEngine.getCommitFromRef(this.get('branch'));
     var visNode = commit.get('visNode');
 
-    this.set('flip', this.getFlipBool(commit, visNode));
+    this.set('flip', this.getFlipValue(commit, visNode));
+    this.refreshOffset();
     return visNode.getScreenCoords();
   },
 
-  getFlipBool: function(commit, visNode) {
+  getFlipValue: function(commit, visNode) {
     var threshold = this.get('gitVisuals').getFlipPos();
     var overThreshold = (visNode.get('pos').x > threshold);
 
@@ -32436,6 +33175,27 @@ var VisBranch = VisBase.extend({
       return (this.isBranchStackEmpty()) ? -1 : 1;
     } else {
       return (this.isBranchStackEmpty()) ? 1 : -1;
+    }
+  },
+
+  refreshOffset: function() {
+    var baseOffsetX = GRAPHICS.nodeRadius * 4.75;
+    var offsetY = 33;
+    var deltaX = 10;
+    if (this.get('flip') === 1) {
+      this.set('offsetY', -offsetY);
+      this.set('offsetX', baseOffsetX - deltaX);
+    } else {
+      this.set('offsetY', offsetY);
+      this.set('offsetX', baseOffsetX - deltaX);
+    }
+  },
+
+  getArrowTransform: function() {
+    if (this.get('flip') === 1) {
+      return 't-2,-20R-35';
+    } else {
+      return 't2,20R-35';
     }
   },
 
@@ -32802,6 +33562,7 @@ var VisBranch = VisBase.extend({
         opacity: nonTextOpacity,
         fill: this.getFill(),
         stroke: this.get('stroke'),
+        transform: this.getArrowTransform(),
         'stroke-width': this.get('stroke-width')
       }
     };
@@ -33164,6 +33925,7 @@ var VisNode = VisBase.extend({
       circle: {
         fill: color,
         stroke: color,
+        'stroke-dasharray': '',
         'stroke-width': this.get('stroke-width') * 5
       },
       text: {}

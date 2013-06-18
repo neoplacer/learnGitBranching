@@ -116,4 +116,9 @@ Or reported an issue that was successfully closed!
 * "Goodwine"
 * Brandon McCaig
 * Borislav Kosharov
+* Ben Heavner
+* Michael (mick-d)
+* Adam Brewer
+* Tobias Pfeiffer
+* Nicholas "LB" Braden
 
