@@ -47,8 +47,6 @@ var Level = Sandbox.extend({
     this.commandsThatCount = this.getCommandsThatCount();
     this.solved = false;
 
-    this.treeCompare = new TreeCompare();
-
     this.initGoalData(options);
     this.initName(options);
 
@@ -90,9 +88,11 @@ var Level = Sandbox.extend({
       return;
     }
 
-    var dialog = _.clone(intl.getStartDialog(levelObj));
+    debugger;
+    console.log(intl.getStartDialog(levelObj));
+    var dialog = $.extend({}, intl.getStartDialog(levelObj));
     // grab the last slide only
-    dialog.childViews = dialog.childViews.splice(-1);
+    dialog.childViews = dialog.childViews.slice(-1);
     new MultiView(_.extend(
       dialog,
       { deferred: deferred }
@@ -340,28 +340,8 @@ var Level = Sandbox.extend({
       return;
     }
 
-    // TODO refactor this ugly ass switch statement...
-    // BIG TODO REALLY REFACTOR HAX HAX
-    // ok so lets see if they solved it...
     var current = this.mainVis.gitEngine.exportTree();
-    var solved;
-    if (this.level.compareOnlyMaster) {
-      solved = this.treeCompare.compareBranchWithinTrees(current, this.level.goalTreeString, 'master');
-    } else if (this.level.compareOnlyBranches) {
-      solved = this.treeCompare.compareAllBranchesWithinTrees(current, this.level.goalTreeString);
-    } else if (this.level.compareAllBranchesHashAgnostic) {
-      solved = this.treeCompare.compareAllBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString);
-    } else if (this.level.compareOnlyMasterHashAgnostic) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-    } else if (this.level.compareOnlyMasterHashAgnosticWithAsserts) {
-      solved = this.treeCompare.compareBranchesWithinTreesHashAgnostic(current, this.level.goalTreeString, ['master']);
-      solved = solved && this.treeCompare.evalAsserts(
-        current,
-        this.level.goalAsserts
-      );
-    } else {
-      solved = this.treeCompare.compareAllBranchesWithinTreesAndHEAD(current, this.level.goalTreeString);
-    }
+    var solved = TreeCompare.dispatchFromLevel(this.level, current);
 
     if (!solved) {
       defer.resolve();
