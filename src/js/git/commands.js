@@ -62,9 +62,11 @@ var regexMap = {
   'git show': /^git +show($|\s)/,
   'git status': /^git +status($|\s)/,
   'git cherry-pick': /^git +cherry-pick($|\s)/,
-  'git fakeTeamwork': /^git +fakeTeamwork *?$/,
+  'git fakeTeamwork': /^git +fakeTeamwork($|\s)/,
   'git fetch': /^git +fetch *?$/,
-  'git originInit': /^git +originInit *?$/
+  'git pull': /^git +pull($|\s)/,
+  'git push': /^git +push($|\s)/,
+  'git clone': /^git +clone *?$/
 };
 
 var parse = function(str) {
@@ -132,6 +134,8 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
       '-d': false,
       '-D': false,
       '-f': false,
+      '-a': false,
+      '-r': false,
       '--contains': false
     },
     checkout: {
@@ -149,8 +153,12 @@ GitOptionParser.prototype.getMasterOptionMap = function() {
     },
     revert: {},
     show: {},
-    originInit: {},
+    clone: {},
     fetch: {},
+    pull: {
+      '--rebase': false
+    },
+    push: {},
     fakeTeamwork: {}
   };
 };

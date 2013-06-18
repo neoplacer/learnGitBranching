@@ -50,6 +50,10 @@ var PositiveNegativeBase = BaseView.extend({
     this.navEvents.trigger('positive');
   },
 
+  exit: function() {
+    this.navEvents.trigger('exit');
+  },
+
   negative: function() {
     this.navEvents.trigger('negative');
   }
@@ -148,7 +152,13 @@ var LeftRightView = PositiveNegativeBase.extend({
   template: _.template($('#left-right-template').html()),
   events: {
     'click .left': 'negative',
+    'click .exit': 'exit',
     'click .right': 'positive'
+  },
+
+  exit: function() {
+    this.pipeEvents.trigger('exit');
+    LeftRightView.__super__.exit.apply(this);
   },
 
   positive: function() {
@@ -705,6 +715,9 @@ var CommandsHelperBar = HelperBar.extend({
       text: 'Undo',
       id: 'undo'
     }, {
+      text: 'Objective',
+      id: 'objectve'
+    }, {
       text: 'Help',
       id: 'help'
     }, {
@@ -716,6 +729,10 @@ var CommandsHelperBar = HelperBar.extend({
   fireCommand: function() {
     log.viewInteracted('helperBar');
     HelperBar.prototype.fireCommand.apply(this, arguments);
+  },
+
+  onObjectiveClick: function() {
+    this.fireCommand('objective');
   },
 
   onLevelsClick: function() {
